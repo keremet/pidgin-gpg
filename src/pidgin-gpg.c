@@ -27,7 +27,7 @@
 	#define FALSE		(1==0)
 #endif
 
-#define	PLUGIN_ID		"core-segler-pidgin-gpg"
+#define PLUGIN_ID		"core-segler-pidgin-gpg"
 #define PREF_ROOT		"/plugins/core/core-segler-pidgin-gpg"
 #define PREF_MY_KEY		"/plugins/core/core-segler-pidgin-gpg/my_key_fpr"
 
@@ -382,7 +382,7 @@ int import_key( char* armored_key ) {
 	if( error ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_release( ctx );
-		return NULL;
+		return FALSE;
 	}
 
 	// import key, ascii armored
@@ -437,7 +437,7 @@ static char* sign( const char* plain_str, const char* fpr ) {
 
 	// get key by fingerprint
 	error = gpgme_get_key( ctx, fpr, &key, 1 );
-	if( error || !key ) {
+	if( error || key == NULL ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_release( ctx );
 		return NULL;
@@ -448,16 +448,17 @@ static char* sign( const char* plain_str, const char* fpr ) {
 	error = gpgme_signers_add( ctx, key );
 	if( error ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_signers_add failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
-		gpgme_key_release( key_arr[ 0 ] );
+		gpgme_key_release( key );
 		gpgme_release( ctx );
 		return NULL;
 	}
+	// release the key
+	gpgme_key_release( key );
 
 	// create data containers
 	error = gpgme_data_new_from_mem( &plain, plain_str, strlen( plain_str ), 1 );
 	if( error ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
-		gpgme_key_release( key_arr[ 0 ] );
 		gpgme_release( ctx );
 		return NULL;
 	}
@@ -465,7 +466,6 @@ static char* sign( const char* plain_str, const char* fpr ) {
 	if( error ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( plain );
-		gpgme_key_release( key_arr[ 0 ] );
 		gpgme_release( ctx );
 		return NULL;
 	}
@@ -477,7 +477,6 @@ static char* sign( const char* plain_str, const char* fpr ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_op_sign failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( sig );
 		gpgme_data_release( plain );
-		gpgme_key_release( key_arr[ 0 ] );
 		gpgme_release( ctx );
 		return NULL;
 	}
@@ -496,7 +495,6 @@ static char* sign( const char* plain_str, const char* fpr ) {
 	}
 	
 	// release resources
-	gpgme_key_release( key_arr[ 0 ] );
 	gpgme_release( ctx );
 
 	return sig_str_dup;
@@ -614,7 +612,7 @@ static char* encrypt( const char* plain_str, const char* fpr ) {
 
 	// get key by fingerprint
 	error = gpgme_get_key( ctx, fpr, &key_arr[ 0 ], 0 );
-	if( error || !key ) {
+	if( error || key_arr[ 0 ] == NULL ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_release( ctx );
 		return NULL;
@@ -933,7 +931,7 @@ static gboolean jabber_presence_received( PurpleConnection* pc, const char* type
 				// add key to list
 				item = g_malloc( sizeof( struct list_item ) );
 				if( item == NULL ) {
-					purple_debug_info( PLUGIN_ID, "jabber_presence_received: out of memory\n", to );
+					purple_debug_info( PLUGIN_ID, "jabber_presence_received: out of memory\n" );
 					g_free( fpr );
 					g_free( bare_jid );
 					return FALSE;
@@ -956,7 +954,7 @@ static gboolean jabber_presence_received( PurpleConnection* pc, const char* type
 void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpointer unused ) {
 	if( packet == NULL ) {
 		purple_debug_error( PLUGIN_ID, "jabber_send_signal_cb: missing packet\n" );
-		return FALSE;
+		return;
 	}
 
 	const char*				status_str = NULL;
@@ -1264,7 +1262,7 @@ void conversation_extended_menu_cb( PurpleConversation* conv, GList** list ) {
 	char					buffer[ 1000 ];
 	PurpleMenuAction*		action = NULL;
 	char					*bare_jid;
-	struct list_item*		item:
+	struct list_item*		item;
 
 	// check if the user with the jid=conv->name has signed his presence
 	bare_jid = get_bare_jid( conv->name );
@@ -1299,7 +1297,7 @@ void conversation_extended_menu_cb( PurpleConversation* conv, GList** list ) {
 void sending_im_msg_cb( PurpleAccount* account, const char* receiver, char** message) {
 	PurpleConversation*		gconv = NULL;
 	char					*bare_jid;
-	struct list_item*		item:
+	struct list_item*		item;
 
 	// search for conversation
 	gconv = purple_find_conversation_with_account( PURPLE_CONV_TYPE_IM, receiver, account );
@@ -1344,7 +1342,7 @@ static gboolean plugin_load( PurplePlugin* plugin ) {
 
 	// check if hashtable already created
 	if( list_fingerprints == NULL )
-		list_fingerprints = g_hash_table_new( g_str_hash, g_str_equal, g_free, list_item_destroy );
+		list_fingerprints = g_hash_table_new_full( g_str_hash, g_str_equal, g_free, list_item_destroy );
 
 	// register presence receiver handler
 	jabber_handle   = purple_plugins_find_with_id( "prpl-jabber" );
