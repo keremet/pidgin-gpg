@@ -4,6 +4,11 @@ pidgin-gpg
 This is an OpenPGP/GPG (XEP-0027) plugin for Pidgin.
 This fork is compatible to the Message Carbons (XEP-0280) extension.
 
+Download
+--------
+Windows users can download a precompiled version of the latest release here:
+https://github.com/Draghtnod/Pidgin-GPG/releases
+
 Building
 --------
 	apt install libpurple-dev libgpgme11-dev
