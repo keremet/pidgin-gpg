@@ -51,11 +51,19 @@ static GHashTable*		list_fingerprints = NULL;
 static const char*		NS_SIGNED		= "jabber:x:signed";
 static const char*		NS_ENC			= "jabber:x:encrypted";
 static const char*		NS_XMPP_CARBONS	= "urn:xmpp:carbons:2";
+static const char*		PGP_MSG_HEADER	= "-----BEGIN PGP MESSAGE-----\n\n";
+static const char*		PGP_MSG_FOOTER	= "\n-----END PGP MESSAGE-----";
+static const char*		PGP_SIG_HEADER	= "-----BEGIN PGP SIGNATURE-----\n\n";
+static const char*		PGP_SIG_FOOTER	= "\n-----END PGP SIGNATURE-----";
 
 /* ------------------
  * internal item definition for list_fingerprints
  * ------------------ */
 struct list_item {
+	// the gpgme context to reuse
+	gpgme_ctx_t				ctx;
+	// the gpgme key array with the fpr and senders fpr within ctx
+	gpgme_key_t				key_arr[ 3 ];
 	// the key-fingerprint of the receiver
 	char*					fpr;
 	// true if connection mode is encrypted
@@ -72,6 +80,12 @@ static void list_item_destroy( gpointer item ) {
 		return;
 
 	// free all resources
+	if( ( (struct list_item*)item )->key_arr{ 0 ] != NULL )
+		gpgme_key_release( ( (struct list_item*)item )->key_arr[ 0 ] );
+	if( ( (struct list_item*)item )->key_arr{ 1 ] != NULL )
+		gpgme_key_release( ( (struct list_item*)item )->key_arr[ 1 ] );
+	if( ( (struct list_item*)item )->ctx != NULL )
+		gpgme_release( ( (struct list_item*)item )->ctx );
 	if( ( (struct list_item*)item )->fpr != NULL )
 		g_free( ( (struct list_item*)item )->fpr );
 	g_free( item );
@@ -117,23 +131,19 @@ static char* str_pgp_wrap( const char* unwrappedBuffer, gboolean asSignature ) {
 		return NULL;
 	}
 
-	const char*				messageHeader	= "-----BEGIN PGP MESSAGE-----\n\n";
-	const char*				messageFooter	= "\n-----END PGP MESSAGE-----";
-	const char*				signatureHeader	= "-----BEGIN PGP SIGNATURE-----\n\n";
-	const char*				signatureFooter	= "\n-----END PGP SIGNATURE-----";
 	char*					buffer = NULL;
 	
 	if( asSignature ) {
-		if( ( buffer = g_malloc( strlen( signatureHeader ) + strlen( unwrappedBuffer ) + strlen( signatureFooter ) + 1 ) ) != NULL ) {
-			strcpy( buffer, signatureHeader );
+		if( ( buffer = g_malloc( strlen( PGP_SIG_HEADER ) + strlen( unwrappedBuffer ) + strlen( PGP_SIG_FOOTER ) + 1 ) ) != NULL ) {
+			strcpy( buffer, PGP_SIG_HEADER );
 			strcat( buffer, unwrappedBuffer );
-			strcat( buffer, signatureFooter );
+			strcat( buffer, PGP_SIG_FOOTER );
 		}
 	} else {
-		if( ( buffer = g_malloc( strlen( messageHeader ) + strlen( unwrappedBuffer ) + strlen( messageFooter ) + 1 ) ) != NULL ) {
-			strcpy( buffer, messageHeader );
+		if( ( buffer = g_malloc( strlen( PGP_MSG_HEADER ) + strlen( unwrappedBuffer ) + strlen( PGP_MSG_FOOTER ) + 1 ) ) != NULL ) {
+			strcpy( buffer, PGP_MSG_HEADER );
 			strcat( buffer, unwrappedBuffer );
-			strcat( buffer, messageFooter );
+			strcat( buffer, PGP_MSG_FOOTER );
 		}
 	}
 
@@ -150,10 +160,8 @@ static char* str_pgp_unwrap( const char* wrappedBuffer ) {
 		return NULL;
 	}
 
-	const char*				header = "-----BEGIN PGP MESSAGE-----";
-	const char*				footer = "-----END PGP MESSAGE-----";
-	const char*				signatureHeader = "-----BEGIN PGP SIGNATURE-----";
-	const char*				signatureFooter = "-----END PGP SIGNATURE-----";
+	const char*				header = PGP_MSG_HEADER;
+	const char*				footer = PGP_MSG_FOOTER;
 	const char				*begin, *end, *tmp;
 	char*					buffer = NULL;
 	unsigned				bufferIndex = 0;
@@ -166,9 +174,9 @@ static char* str_pgp_unwrap( const char* wrappedBuffer ) {
 	if( ( tmp = strstr( begin, header ) ) != NULL )
 		begin == tmp;
 	// Search for the signature header
-	else if( ( begin = strstr( begin, signatureHeader ) ) != NULL ) {
-		header = signatureHeader;
-		footer = signatureFooter;
+	else if( ( begin = strstr( begin, PGP_SIG_HEADER ) ) != NULL ) {
+		header = PGP_SIG_HEADER;
+		footer = PGP_SIG_FOOTER;
 	} else
 		return NULL;
 	// Skip the header
@@ -224,58 +232,75 @@ static char* get_bare_jid( const char* jid ) {
 /* ------------------
  * check if a key is locally available
  * ------------------ */
-int is_key_available( const char* fpr, int secret, int servermode, char** userid ) {
+int is_key_available( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* fpr, int secret, int servermode, char** userid ) {
+	if( ctx == NULL ) {
+		purple_debug_error( PLUGIN_ID, "is_key_available: missing ctx\n" );
+		return NULL;
+	}
+	if( key_arr == NULL ) {
+		purple_debug_error( PLUGIN_ID, "is_key_available: missing key_arr\n" );
+		return NULL;
+	}
 	if( fpr == NULL ) {
 		purple_debug_error( PLUGIN_ID, "is_key_available: missing fpr\n" );
 		return FALSE;
 	}
 
 	gpgme_error_t			error;
-	gpgme_ctx_t				ctx;
-	gpgme_key_t				key_arr[ 2 ];
 	gpgme_keylist_mode_t	current_keylist_mode;
 
-	key_arr[ 0 ] = key_arr[ 1 ] = NULL;
-
-	// connect to gpgme
-	gpgme_check_version( NULL );
-	error = gpgme_new( &ctx );
-	if( error ){
-		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
-		return FALSE;
+	// connect to gpgme if no context is given to reuse
+	if( *ctx == NULL ) {
+		gpgme_check_version( NULL );
+		error = gpgme_new( ctx );
+		if( error ){
+			purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+			return FALSE;
+		}
 	}
 
-	// set to server search mode if servermode == TRUE
-	if( servermode == TRUE ) {
-		purple_debug_info( PLUGIN_ID, "set keylist mode to server\n" );
-		current_keylist_mode = gpgme_get_keylist_mode( ctx );
-		gpgme_set_keylist_mode( ctx, ( current_keylist_mode | GPGME_KEYLIST_MODE_EXTERN ) & ( ~GPGME_KEYLIST_MODE_LOCAL ) );
-	}
+	// if there is no key yet
+	if( key_arr[ 0 ] == NULL ) {
+		// set to server search mode if servermode == TRUE
+		if( servermode == TRUE ) {
+			purple_debug_info( PLUGIN_ID, "set keylist mode to server\n" );
+			current_keylist_mode = gpgme_get_keylist_mode( *ctx );
+			gpgme_set_keylist_mode( *ctx, ( current_keylist_mode | GPGME_KEYLIST_MODE_EXTERN ) & ( ~GPGME_KEYLIST_MODE_LOCAL ) );
+		}
 
-	// get key by fingerprint
-	error = gpgme_get_key( ctx, fpr, &key_arr[ 0 ], secret );
-	if( error || key_arr[ 0 ] == NULL ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
-		gpgme_release( ctx );
-		return FALSE;
+		// get key by fingerprint
+		error = gpgme_get_key( *ctx, fpr, &key_arr[ 0 ], secret );
+		if( error || key_arr[ 0 ] == NULL ) {
+			purple_debug_error( PLUGIN_ID, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+			if( ctx == &tmp_ctx )
+				gpgme_release( *ctx );
+			return FALSE;
+		}
+
+		// in server mode
+		if( serverMode == TRUE ) {
+			// unset server search mode
+			if( servermode == TRUE ) {
+				purple_debug_info( PLUGIN_ID, "set keylist mode to server\n" );
+				current_keylist_mode = gpgme_get_keylist_mode( *ctx );
+				gpgme_set_keylist_mode( *ctx, ( current_keylist_mode | GPGME_KEYLIST_MODE_LOCAL ) & ( ~GPGME_KEYLIST_MODE_EXTERN ) );
+			}
+
+			// import the key
+			error = gpgme_op_import_keys( *ctx, key_arr );
+			if( error ) {
+				purple_debug_error( PLUGIN_ID, "gpgme_op_import_keys failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+				if( ctx == &tmp_ctx )
+					gpgme_release( *ctx );
+				return FALSE;
+			}
+		}
 	}
 
 	// if we have parameter, tell caller about userid
 	if( userid != NULL ) {
 		*userid = g_strdup( key_arr[ 0 ]->uids->uid );
 	}
-
-	// import key
-	error = gpgme_op_import_keys( ctx, key_arr );
-	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_op_import_keys failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
-		gpgme_release( ctx );
-		return FALSE;
-	}
-
-	// release resources
-	gpgme_key_release( key_arr[ 0 ] );
-	gpgme_release( ctx );
 
 	return TRUE;
 }
@@ -581,7 +606,15 @@ static char* verify( const char* sig_str ) {
  * encrypt a plain string with the key found with fingerprint fpr
  * FREE MEMORY AFTER USAGE OF RETURN VALUE!
  * ------------------ */
-static char* encrypt( const char* plain_str, const char* fpr ) {
+static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_str, const char* fpr ) {
+	if( ctx == NULL ) {
+		purple_debug_error( PLUGIN_ID, "encrypt: missing ctx\n" );
+		return NULL;
+	}
+	if( key_arr == NULL ) {
+		purple_debug_error( PLUGIN_ID, "encrypt: missing key_arr\n" );
+		return NULL;
+	}
 	if( plain_str == NULL ) {
 		purple_debug_error( PLUGIN_ID, "encrypt: missing plain_str\n" );
 		return NULL;
@@ -592,74 +625,64 @@ static char* encrypt( const char* plain_str, const char* fpr ) {
 	}
 
 	gpgme_error_t			error;
-	gpgme_ctx_t				ctx;
 	gpgme_data_t			plain,	cipher;
 	const char*				sender_fpr;
 	char*					cipher_str = NULL;
 	char*					cipher_str_dup = NULL;
 	size_t					len;
-	gpgme_key_t				key_arr[ 3 ];
 
-	key_arr[ 0 ] = key_arr[ 1 ] = key_arr[ 2 ] = NULL;
-
-	// connect to gpgme
-	gpgme_check_version( NULL );
-	error = gpgme_new( &ctx );
-	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
-		return NULL;
+	// connect to gpgme, if the context doesn't exist
+	if( *ctx == NULL ) {
+		gpgme_check_version( NULL );
+		error = gpgme_new( ctx );
+		if( error ) {
+			purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+			return NULL;
+		}
 	}
 
-	// get key by fingerprint
-	error = gpgme_get_key( ctx, fpr, &key_arr[ 0 ], 0 );
-	if( error || key_arr[ 0 ] == NULL ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
-		gpgme_release( ctx );
-		return NULL;
+	// get key by fingerprint, if it doesn't exist
+	if( key_arr[ 0 ] == NULL ) {
+		error = gpgme_get_key( *ctx, fpr, &key_arr[ 0 ], 0 );
+		if( error || key_arr[ 0 ] == NULL ) {
+			purple_debug_error( PLUGIN_ID, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+			return NULL;
+		}
 	}
 
-	// check if user selected a main key
-	sender_fpr = purple_prefs_get_string( PREF_MY_KEY );
-	if( sender_fpr != NULL && strcmp( sender_fpr, "" ) != 0 ) {
-		// get own key by fingerprint
-		error = gpgme_get_key( ctx, sender_fpr, &key_arr[ 1 ], 0 );
-		if( error || key_arr[ 1 ] == NULL )
-			purple_debug_error( PLUGIN_ID, "gpgme_get_key: sender key for fingerprint %s is missing! error: %s %s\n", sender_fpr, gpgme_strsource( error ), gpgme_strerror( error ) );
-	} else
-		purple_debug_error( PLUGIN_ID, "purple_prefs_get_string: PREF_MY_KEY was empty\n");
+	// get sender key by fingerprint, if it doesn't exist
+	if( key_arr[ 1 ] == NULL ) {
+		// check if user selected a main key
+		sender_fpr = purple_prefs_get_string( PREF_MY_KEY );
+		if( sender_fpr != NULL && strcmp( sender_fpr, "" ) != 0 ) {
+			// get own key by fingerprint
+			error = gpgme_get_key( *ctx, sender_fpr, &key_arr[ 1 ], 0 );
+			if( error || key_arr[ 1 ] == NULL )
+				purple_debug_error( PLUGIN_ID, "gpgme_get_key: sender key for fingerprint %s is missing! error: %s %s\n", sender_fpr, gpgme_strsource( error ), gpgme_strerror( error ) );
+		} else
+			purple_debug_error( PLUGIN_ID, "purple_prefs_get_string: PREF_MY_KEY was empty\n");
+	}
 
 	// create data containers
 	error = gpgme_data_new_from_mem( &plain, plain_str, strlen( plain_str ), 1 );
 	if( error ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
-		if( key_arr[ 1 ] != NULL )
-			gpgme_key_release( key_arr[ 1 ] );
-		gpgme_key_release( key_arr[ 0 ] );
-		gpgme_release( ctx );
 		return NULL;
 	}
 	error = gpgme_data_new( &cipher );
 	if( error ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( plain );
-		if( key_arr[ 1 ] != NULL )
-			gpgme_key_release( key_arr[ 1 ] );
-		gpgme_key_release( key_arr[ 0 ] );
-		gpgme_release( ctx );
 		return NULL;
 	}
 
 	// encrypt, ascii armored
 	gpgme_set_armor( ctx, 1 );
-	error = gpgme_op_encrypt( ctx, key_arr, GPGME_ENCRYPT_ALWAYS_TRUST, plain, cipher );
+	error = gpgme_op_encrypt( *ctx, key_arr, GPGME_ENCRYPT_ALWAYS_TRUST, plain, cipher );
 	if( error ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_op_encrypt failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( cipher );
 		gpgme_data_release( plain );
-		if( key_arr[ 1 ] != NULL )
-			gpgme_key_release( key_arr[ 1 ] );
-		gpgme_key_release( key_arr[ 0 ] );
-		gpgme_release( ctx );
 		return NULL;
 	}
 
@@ -671,20 +694,10 @@ static char* encrypt( const char* plain_str, const char* fpr ) {
 		if( cipher_str_dup == NULL ) {
 			purple_debug_error( PLUGIN_ID, "str_pgp_unwrap failed, the armored message seems to be incorrect: %s\n", cipher_str );
 			gpgme_free( cipher_str );
-			if( key_arr[ 1 ] != NULL )
-				gpgme_key_release( key_arr[ 1 ] );
-			gpgme_key_release( key_arr[ 0 ] );
-			gpgme_release( ctx );
 			return NULL;
 		}
 		gpgme_free( cipher_str );
 	}
-	
-	// release resources
-	if( key_arr[ 1 ] != NULL )
-		gpgme_key_release( key_arr[ 1 ] );
-	gpgme_key_release( key_arr[ 0 ] );
-	gpgme_release( ctx );
 
 	return cipher_str_dup;
 }
@@ -928,16 +941,26 @@ static gboolean jabber_presence_received( PurpleConnection* pc, const char* type
 				}
 				purple_debug_info( PLUGIN_ID, "user %s has fingerprint %s\n", bare_jid, fpr );
 
-				// add key to list
-				item = g_malloc( sizeof( struct list_item ) );
-				if( item == NULL ) {
-					purple_debug_info( PLUGIN_ID, "jabber_presence_received: out of memory\n" );
-					g_free( fpr );
-					g_free( bare_jid );
-					return FALSE;
+				// check if the fpr is already in the list
+				item = g_hash_table_lookup( list_fingerprints, bare_jid );
+				// clear the entry if the fpr has changed
+				if( item != NULL && strcmp( item->fpr, fpr ) != 0 ) {
+					g_hash_table_remove( list_fingerprints, bare_jid );
+					item = NULL;
 				}
-				item->fpr = fpr;
-				g_hash_table_replace( list_fingerprints, bare_jid, item );
+				// add key to list if it doesn't exist
+				if( item == NULL ) {
+					item = g_malloc( sizeof( struct list_item ) );
+					if( item == NULL ) {
+						purple_debug_info( PLUGIN_ID, "jabber_presence_received: out of memory\n" );
+						g_free( fpr );
+						g_free( bare_jid );
+						return FALSE;
+					}
+					memset( item, 0, sizeof( struct list_item ) );
+					item->fpr = fpr;
+					g_hash_table_insert( list_fingerprints, bare_jid, item );
+				}
 			} else
 				purple_debug_error( PLUGIN_ID, "could not verify presence of user %s\n", from );
 		} else
@@ -960,7 +983,7 @@ void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpointer unu
 	const char*				status_str = NULL;
 	xmlnode					*status_node, *x_node, *body_node;
 	const char				*fpr, *to;
-	char					*sig_str, *message, *enc_str, *bare_jid, *fpr_to;
+	char					*sig_str, *message, *enc_str, *bare_jid;
 	struct list_item*		item;
 
 	g_return_if_fail( PURPLE_CONNECTION_IS_VALID( pc ) );
@@ -1029,13 +1052,11 @@ void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpointer unu
 				g_free( bare_jid );
 				return;
 			}
-
-			fpr_to = item->fpr;
-			purple_debug_info( PLUGIN_ID, "found key for encryption to user %s: %s\n", bare_jid, fpr_to );
+			purple_debug_info( PLUGIN_ID, "found key for encryption to user %s: %s\n", bare_jid, item->fpr );
 			g_free( bare_jid );
 
 			// encrypt message
-			enc_str = encrypt( message, fpr_to );
+			enc_str = encrypt( &item->ctx, item->key_arr, message, item->fpr );
 			g_free( message );
 			if( enc_str != NULL ) {
 				// remove message from body
@@ -1084,7 +1105,7 @@ void conversation_created_cb( PurpleConversation* conv, char* data ) {
 	item = g_hash_table_lookup( list_fingerprints, bare_jid );
 	if( item != NULL ) {
 		// check if we have key locally
-		if( is_key_available( item->fpr, FALSE, FALSE, &userid ) == FALSE ) {
+		if( is_key_available( &item->ctx, item->key_arr, item->fpr, FALSE, FALSE, &userid ) == FALSE ) {
 			// local key is missing
 			sprintf( sys_msg_buffer, "User has key with Fingerprint %s, but we do not have it locally. Try Options -> \"Try to retrieve key of '%s' from server\"", item->fpr, bare_jid );
 		} else {
@@ -1228,7 +1249,7 @@ static void menu_action_retrievekey_cb( PurpleConversation* conv, void* data ) {
 	// get stored info about user
 	item = g_hash_table_lookup( list_fingerprints, bare_jid );
 	if( item != NULL ) {
-		if( is_key_available( item->fpr, FALSE, TRUE, &userid ) == FALSE ) {
+		if( is_key_available( &item->ctx, item->key_arr, item->fpr, FALSE, TRUE, &userid ) == FALSE ) {
 			sprintf( sys_msg_buffer, "Did not find key with ID '%s' on keyservers.", item->fpr );
 			purple_conversation_write( conv, "", sys_msg_buffer, PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time( NULL ) );
 		} else {
@@ -1315,7 +1336,7 @@ void sending_im_msg_cb( PurpleAccount* account, const char* receiver, char** mes
 			// if we are in private mode
 			if( item->mode_sec == TRUE ) {
 				// try to get key
-				if( is_key_available( item->fpr, FALSE, FALSE, NULL ) == FALSE ) {
+				if( is_key_available( &item->ctx, item->key_arr, item->fpr, FALSE, FALSE, NULL ) == FALSE ) {
 					// we do not have key of receiver
 					// -> cancel message sending
 					if( message != NULL && *message != NULL ) {
