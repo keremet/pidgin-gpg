@@ -51,10 +51,10 @@ static GHashTable*		list_fingerprints = NULL;
 static const char*		NS_SIGNED		= "jabber:x:signed";
 static const char*		NS_ENC			= "jabber:x:encrypted";
 static const char*		NS_XMPP_CARBONS	= "urn:xmpp:carbons:2";
-static const char*		PGP_MSG_HEADER	= "-----BEGIN PGP MESSAGE-----\n\n";
-static const char*		PGP_MSG_FOOTER	= "\n-----END PGP MESSAGE-----";
-static const char*		PGP_SIG_HEADER	= "-----BEGIN PGP SIGNATURE-----\n\n";
-static const char*		PGP_SIG_FOOTER	= "\n-----END PGP SIGNATURE-----";
+static const char*		PGP_MSG_HEADER	= "-----BEGIN PGP MESSAGE-----";
+static const char*		PGP_MSG_FOOTER	= "-----END PGP MESSAGE-----";
+static const char*		PGP_SIG_HEADER	= "-----BEGIN PGP SIGNATURE-----";
+static const char*		PGP_SIG_FOOTER	= "-----END PGP SIGNATURE-----";
 
 /* ------------------
  * internal item definition for list_fingerprints
@@ -80,9 +80,9 @@ static void list_item_destroy( gpointer item ) {
 		return;
 
 	// free all resources
-	if( ( (struct list_item*)item )->key_arr{ 0 ] != NULL )
+	if( ( (struct list_item*)item )->key_arr[ 0 ] != NULL )
 		gpgme_key_release( ( (struct list_item*)item )->key_arr[ 0 ] );
-	if( ( (struct list_item*)item )->key_arr{ 1 ] != NULL )
+	if( ( (struct list_item*)item )->key_arr[ 1 ] != NULL )
 		gpgme_key_release( ( (struct list_item*)item )->key_arr[ 1 ] );
 	if( ( (struct list_item*)item )->ctx != NULL )
 		gpgme_release( ( (struct list_item*)item )->ctx );
@@ -132,17 +132,21 @@ static char* str_pgp_wrap( const char* unwrappedBuffer, gboolean asSignature ) {
 	}
 
 	char*					buffer = NULL;
-	
+
 	if( asSignature ) {
-		if( ( buffer = g_malloc( strlen( PGP_SIG_HEADER ) + strlen( unwrappedBuffer ) + strlen( PGP_SIG_FOOTER ) + 1 ) ) != NULL ) {
+		if( ( buffer = g_malloc( strlen( PGP_SIG_HEADER ) + strlen( unwrappedBuffer ) + strlen( PGP_SIG_FOOTER ) + 4 ) ) != NULL ) {
 			strcpy( buffer, PGP_SIG_HEADER );
+			strcat( buffer, "\n\n" );
 			strcat( buffer, unwrappedBuffer );
+			strcat( buffer, "\n" );
 			strcat( buffer, PGP_SIG_FOOTER );
 		}
 	} else {
-		if( ( buffer = g_malloc( strlen( PGP_MSG_HEADER ) + strlen( unwrappedBuffer ) + strlen( PGP_MSG_FOOTER ) + 1 ) ) != NULL ) {
+		if( ( buffer = g_malloc( strlen( PGP_MSG_HEADER ) + strlen( unwrappedBuffer ) + strlen( PGP_MSG_FOOTER ) + 4 ) ) != NULL ) {
 			strcpy( buffer, PGP_MSG_HEADER );
+			strcat( buffer, "\n\n" );
 			strcat( buffer, unwrappedBuffer );
+			strcat( buffer, "\n" );
 			strcat( buffer, PGP_MSG_FOOTER );
 		}
 	}
@@ -235,11 +239,11 @@ static char* get_bare_jid( const char* jid ) {
 int is_key_available( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* fpr, int secret, int servermode, char** userid ) {
 	if( ctx == NULL ) {
 		purple_debug_error( PLUGIN_ID, "is_key_available: missing ctx\n" );
-		return NULL;
+		return FALSE;
 	}
 	if( key_arr == NULL ) {
 		purple_debug_error( PLUGIN_ID, "is_key_available: missing key_arr\n" );
-		return NULL;
+		return FALSE;
 	}
 	if( fpr == NULL ) {
 		purple_debug_error( PLUGIN_ID, "is_key_available: missing fpr\n" );
@@ -272,26 +276,20 @@ int is_key_available( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* fpr, i
 		error = gpgme_get_key( *ctx, fpr, &key_arr[ 0 ], secret );
 		if( error || key_arr[ 0 ] == NULL ) {
 			purple_debug_error( PLUGIN_ID, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
-			if( ctx == &tmp_ctx )
-				gpgme_release( *ctx );
 			return FALSE;
 		}
 
 		// in server mode
-		if( serverMode == TRUE ) {
+		if( servermode == TRUE ) {
 			// unset server search mode
-			if( servermode == TRUE ) {
-				purple_debug_info( PLUGIN_ID, "set keylist mode to server\n" );
-				current_keylist_mode = gpgme_get_keylist_mode( *ctx );
-				gpgme_set_keylist_mode( *ctx, ( current_keylist_mode | GPGME_KEYLIST_MODE_LOCAL ) & ( ~GPGME_KEYLIST_MODE_EXTERN ) );
-			}
+			purple_debug_info( PLUGIN_ID, "set keylist mode to server\n" );
+			current_keylist_mode = gpgme_get_keylist_mode( *ctx );
+			gpgme_set_keylist_mode( *ctx, ( current_keylist_mode | GPGME_KEYLIST_MODE_LOCAL ) & ( ~GPGME_KEYLIST_MODE_EXTERN ) );
 
 			// import the key
 			error = gpgme_op_import_keys( *ctx, key_arr );
 			if( error ) {
 				purple_debug_error( PLUGIN_ID, "gpgme_op_import_keys failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
-				if( ctx == &tmp_ctx )
-					gpgme_release( *ctx );
 				return FALSE;
 			}
 		}
@@ -677,7 +675,7 @@ static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_
 	}
 
 	// encrypt, ascii armored
-	gpgme_set_armor( ctx, 1 );
+	gpgme_set_armor( *ctx, 1 );
 	error = gpgme_op_encrypt( *ctx, key_arr, GPGME_ENCRYPT_ALWAYS_TRUST, plain, cipher );
 	if( error ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_op_encrypt failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );

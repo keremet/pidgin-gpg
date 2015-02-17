@@ -17,6 +17,8 @@ FROM	debian:wheezy
 
 # Get all packages and sources neccessary to compile pidgin
 RUN	echo	"deb ftp://ftp.debian.org/debian wheezy main\n" \
+			"deb ftp://ftp.debian.org/debian wheezy-updates main\n" \
+			"deb http://security.debian.org wheezy/updates main\n" \
 		> /etc/apt/sources.list && \
 	apt-get update && \
 	apt-get install -y curl unzip mercurial mingw32-runtime gcc-mingw32 build-essential gettext intltool wget zip nsis && \
