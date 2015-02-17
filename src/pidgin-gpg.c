@@ -51,10 +51,10 @@ static GHashTable*		list_fingerprints = NULL;
 static const char*		NS_SIGNED		= "jabber:x:signed";
 static const char*		NS_ENC			= "jabber:x:encrypted";
 static const char*		NS_XMPP_CARBONS	= "urn:xmpp:carbons:2";
-static const char*		PGP_MSG_HEADER	= "-----BEGIN PGP MESSAGE-----\n\n";
-static const char*		PGP_MSG_FOOTER	= "\n-----END PGP MESSAGE-----";
-static const char*		PGP_SIG_HEADER	= "-----BEGIN PGP SIGNATURE-----\n\n";
-static const char*		PGP_SIG_FOOTER	= "\n-----END PGP SIGNATURE-----";
+static const char*		PGP_MSG_HEADER	= "-----BEGIN PGP MESSAGE-----";
+static const char*		PGP_MSG_FOOTER	= "-----END PGP MESSAGE-----";
+static const char*		PGP_SIG_HEADER	= "-----BEGIN PGP SIGNATURE-----";
+static const char*		PGP_SIG_FOOTER	= "-----END PGP SIGNATURE-----";
 
 /* ------------------
  * internal item definition for list_fingerprints
@@ -132,17 +132,21 @@ static char* str_pgp_wrap( const char* unwrappedBuffer, gboolean asSignature ) {
 	}
 
 	char*					buffer = NULL;
-	
+
 	if( asSignature ) {
-		if( ( buffer = g_malloc( strlen( PGP_SIG_HEADER ) + strlen( unwrappedBuffer ) + strlen( PGP_SIG_FOOTER ) + 1 ) ) != NULL ) {
+		if( ( buffer = g_malloc( strlen( PGP_SIG_HEADER ) + strlen( unwrappedBuffer ) + strlen( PGP_SIG_FOOTER ) + 4 ) ) != NULL ) {
 			strcpy( buffer, PGP_SIG_HEADER );
+			strcat( buffer, "\n\n" );
 			strcat( buffer, unwrappedBuffer );
+			strcat( buffer, "\n" );
 			strcat( buffer, PGP_SIG_FOOTER );
 		}
 	} else {
-		if( ( buffer = g_malloc( strlen( PGP_MSG_HEADER ) + strlen( unwrappedBuffer ) + strlen( PGP_MSG_FOOTER ) + 1 ) ) != NULL ) {
+		if( ( buffer = g_malloc( strlen( PGP_MSG_HEADER ) + strlen( unwrappedBuffer ) + strlen( PGP_MSG_FOOTER ) + 4 ) ) != NULL ) {
 			strcpy( buffer, PGP_MSG_HEADER );
+			strcat( buffer, "\n\n" );
 			strcat( buffer, unwrappedBuffer );
+			strcat( buffer, "\n" );
 			strcat( buffer, PGP_MSG_FOOTER );
 		}
 	}
