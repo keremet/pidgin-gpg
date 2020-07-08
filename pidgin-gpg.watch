@@ -1,0 +1,4 @@
+version=4
+opts="mode=git, gitmode=full, pgpmode=none" \
+	https://github.com/Draghtnod/Pidgin-GPG \
+	refs/tags/v([\d\.]+)
