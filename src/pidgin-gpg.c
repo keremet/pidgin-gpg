@@ -27,9 +27,12 @@
 	#define FALSE		(1==0)
 #endif
 
+#define EQ_STR( s1, s2 ) (strcmp(s1, s2) == 0)
+
 #define PLUGIN_ID		"core-segler-pidgin-gpg"
 #define PREF_ROOT		"/plugins/core/core-segler-pidgin-gpg"
 #define PREF_MY_KEY		"/plugins/core/core-segler-pidgin-gpg/my_key_fpr"
+#define PREF_PUB_KEY_FPR	"GPG/pub_key_fpr"
 
 #include				"../config.h"
 
@@ -72,6 +75,18 @@ struct list_item {
 	int						mode_sec_old;
 };
 
+/* ------------------
+ * Use g_strdup for arguments
+ * ------------------ */
+static void list_fingerprints_add( char* bare_jid, char* pub_key_fpr ) {
+	if( NULL == list_fingerprints || NULL == bare_jid || NULL == pub_key_fpr )
+		return;
+
+	struct list_item* item = g_malloc0( sizeof( struct list_item ) );
+	item->fpr = pub_key_fpr;
+	item->mode_sec = TRUE;
+	g_hash_table_insert( list_fingerprints, bare_jid, item );
+}
 /* ------------------
  * called upon destruction of a list_item
  * ------------------ */
@@ -380,7 +395,7 @@ char* get_key_armored( const char* fpr ) {
 /* ------------------
  * import ascii armored key
  * ------------------ */
-int import_key( char* armored_key ) {
+int import_key( const char* armored_key ) {
 	if( armored_key == NULL ) {
 		purple_debug_error( PLUGIN_ID, "import_key: missing armored_key\n" );
 		return FALSE;
@@ -704,7 +719,7 @@ static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_
  * decrypt a plain string with the key found with fingerprint fpr
  * FREE MEMORY AFTER USAGE OF RETURN VALUE
  * ------------------ */
-static char* decrypt( char* cipher_str ) {
+static char* decrypt( const char* cipher_str ) {
 	if( cipher_str == NULL ) {
 		purple_debug_error( PLUGIN_ID, "decrypt: missing cipher_str\n" );
 		return NULL;
@@ -818,7 +833,7 @@ static gboolean jabber_message_received( PurpleConnection* pc, const char* type,
 	const xmlnode*			parent_node = message;
 	xmlnode					*x_node = NULL, *body_node = NULL;
 	char					*data, *bare_jid_own, *bare_jid, *cipher_str, *plain_str;
-	const char*				header = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
+	static const char*		header = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
 	struct list_item*		item = NULL;
 
 	// check if message is a key
@@ -905,64 +920,65 @@ static gboolean jabber_message_received( PurpleConnection* pc, const char* type,
 /* ------------------
  * called on received presence
  * ------------------ */
-static gboolean jabber_presence_received( PurpleConnection* pc, const char* type, const char* from, xmlnode* presence ) {
-	if( from == NULL ) {
+static gboolean jabber_presence_received( PurpleConnection* pc, const char* type, const char* from, const xmlnode* presence ) {
+	if( NULL == from ) {
 		purple_debug_error( PLUGIN_ID, "jabber_presence_received: missing from\n" );
 		return FALSE;
 	}
-	if( presence == NULL ) {
+	if( NULL == presence ) {
 		purple_debug_error( PLUGIN_ID, "jabber_presence_received: missing presence\n" );
 		return FALSE;
 	}
 
-	const xmlnode*			parent_node = presence;
-	xmlnode*				x_node = NULL;
-	char					*x_node_data, *fpr, *bare_jid;
-	struct list_item*		item;
-
 	// check if presence has special "x" childnode
-	x_node = xmlnode_get_child_with_namespace( parent_node, "x" ,NS_SIGNED );
-	if( x_node != NULL ) {
-		// user supports openpgp encryption
-		purple_debug_info( PLUGIN_ID, "user %s supports openpgp encryption!\n", from );
+	const xmlnode* x_node = xmlnode_get_child_with_namespace( presence, "x", NS_SIGNED );
+	if( NULL == x_node )
+		return FALSE;
+	// user supports openpgp encryption
+	purple_debug_info( PLUGIN_ID, "user %s supports openpgp encryption!\n", from );
+	char* bare_jid = get_bare_jid( from );
+	if( NULL == bare_jid ) {
+		purple_debug_info( PLUGIN_ID, "jabber_presence_received: get_bare_jid failed for %s\n", from );
+		return FALSE;
+	}
 
-		x_node_data = xmlnode_get_data( x_node );
-		if( x_node_data != NULL ) {
-			// try to verify
-			fpr = verify( x_node_data );
-			if( fpr != NULL ) {
-				bare_jid = get_bare_jid( from );
-				if( bare_jid == NULL ) {
-					purple_debug_info( PLUGIN_ID, "jabber_presence_received: get_bare_jid failed for %s\n", from );
-					g_free( fpr );
-					return FALSE;
-				}
-				purple_debug_info( PLUGIN_ID, "user %s has fingerprint %s\n", bare_jid, fpr );
+	PurpleBuddy *buddy = purple_find_buddy( purple_connection_get_account( pc ), bare_jid );
+	if( NULL == buddy ) {
+		purple_debug_info( PLUGIN_ID, "buddy %s not found\n", bare_jid );
+		g_free( bare_jid );
+		return FALSE;
+	}
 
-				// check if the fpr is already in the list
-				item = g_hash_table_lookup( list_fingerprints, bare_jid );
-				// clear the entry if the fpr has changed
-				if( item != NULL && strcmp( item->fpr, fpr ) != 0 ) {
-					g_hash_table_remove( list_fingerprints, bare_jid );
-					item = NULL;
-				}
-				// add key to list if it doesn't exist
-				if( item == NULL ) {
-					item = g_malloc( sizeof( struct list_item ) );
-					if( item == NULL ) {
-						purple_debug_info( PLUGIN_ID, "jabber_presence_received: out of memory\n" );
-						g_free( fpr );
-						g_free( bare_jid );
-						return FALSE;
-					}
-					memset( item, 0, sizeof( struct list_item ) );
-					item->fpr = fpr;
-					g_hash_table_insert( list_fingerprints, bare_jid, item );
-				}
-			} else
-				purple_debug_error( PLUGIN_ID, "could not verify presence of user %s\n", from );
+	const char* pub_key_fpr = purple_blist_node_get_string( &buddy->node, PREF_PUB_KEY_FPR );
+	if( NULL == pub_key_fpr )
+		g_free( bare_jid );
+	else {
+		struct list_item* item = g_hash_table_lookup( list_fingerprints, bare_jid );
+		if( NULL == item  )
+			list_fingerprints_add( bare_jid, g_strdup( pub_key_fpr ) );
+		else if( !EQ_STR( pub_key_fpr, item->fpr ) ) {
+			g_hash_table_remove( list_fingerprints, bare_jid );
+			list_fingerprints_add( bare_jid, g_strdup( pub_key_fpr ) );
 		} else
-			purple_debug_info( PLUGIN_ID, "user %s sent empty signed presence\n", from );
+			g_free( bare_jid );
+
+		purple_debug_info( PLUGIN_ID, "fingerprint %s was set for user %s\n", pub_key_fpr, bare_jid );
+	}
+
+	char* x_node_data = xmlnode_get_data( x_node );
+	if( NULL == x_node_data )
+		purple_debug_info( PLUGIN_ID, "user %s sent empty signed presence\n", from );
+	else {
+		// try to verify
+		char* fpr = verify( x_node_data );
+		if( NULL == fpr )
+			purple_debug_error( PLUGIN_ID, "could not verify presence of user %s\n", from );
+		else {
+			purple_debug_info( PLUGIN_ID, "user %s has fingerprint %s\n", from, fpr );
+			g_free(fpr);
+		}
+
+		g_free(x_node_data);
 	}
 
 	// We don't want the plugin to stop processing
@@ -1084,38 +1100,50 @@ void conversation_created_cb( PurpleConversation* conv, char* data ) {
 		purple_debug_error( PLUGIN_ID, "conversation_created_cb: missing conv\n" );
 		return;
 	}
+
 	if( purple_conversation_get_type( conv ) != PURPLE_CONV_TYPE_IM )
 		return;
 
-	char					sys_msg_buffer[1000];
-	char					*bare_jid, *userid = NULL;
-	struct list_item*		item;
-
 	// check if the user with the jid=conv->name has signed his presence
-	bare_jid = get_bare_jid( conv->name );
-	if( bare_jid == NULL ) {
+	char* bare_jid = get_bare_jid( conv->name );
+	if( NULL == bare_jid ) {
 		purple_debug_info( PLUGIN_ID, "conversation_created_cb: get_bare_jid failed for %s\n", conv->name );
 		return;
 	}
+
 	purple_debug_info( PLUGIN_ID, "conversation name: %s bare jid: %s\n", conv->name, bare_jid );
 
 	// get stored info about user
-	item = g_hash_table_lookup( list_fingerprints, bare_jid );
+	char sys_msg_buffer[1000];
+	struct list_item* item = g_hash_table_lookup( list_fingerprints, bare_jid );
 	if( item != NULL ) {
 		// check if we have key locally
+		char *userid = NULL;
 		if( is_key_available( &item->ctx, item->key_arr, item->fpr, FALSE, FALSE, &userid ) == FALSE ) {
 			// local key is missing
-			sprintf( sys_msg_buffer, "User has key with Fingerprint %s, but we do not have it locally. Try Options -> \"Try to retrieve key of '%s' from server\"", item->fpr, bare_jid );
+			snprintf( sys_msg_buffer, sizeof( sys_msg_buffer ), "User has key with Fingerprint %s, but we do not have it locally. Try Options -> \"Try to retrieve key of '%s' from server\"", item->fpr, bare_jid );
 		} else {
 			// key is already available locally -> enable mode_enc
-			sprintf( sys_msg_buffer, "Encryption enabled with %s (%s)", userid, item->fpr );
+			snprintf( sys_msg_buffer, sizeof( sys_msg_buffer ), "Encryption enabled with %s (%s)", userid, item->fpr );
 			item->mode_sec = TRUE;
 		}
 		if( userid != NULL )
 			g_free( userid );
 		userid = NULL;
-	}else
-		sprintf( sys_msg_buffer, "Encryption disabled, the remote client doesn't support it." );
+	} else {
+		PurpleBuddy *buddy = purple_find_buddy( purple_conversation_get_account( conv ), bare_jid );
+		if( NULL == buddy )
+			snprintf( sys_msg_buffer, sizeof( sys_msg_buffer ), "buddy %s not found\n", bare_jid );
+		else {
+			const char* pub_key_fpr = purple_blist_node_get_string( &buddy->node, PREF_PUB_KEY_FPR );
+			if( NULL == pub_key_fpr )
+				strcpy( sys_msg_buffer, "Encryption disabled. Set public key for the remote client." );
+			else {
+				list_fingerprints_add( g_strdup( bare_jid ), g_strdup( pub_key_fpr ) );
+				snprintf( sys_msg_buffer, sizeof( sys_msg_buffer ), "Encryption enabled. Fingerprint %s was set manually", pub_key_fpr );
+			}
+		}
+	}
 
 	// display message about received message
 	purple_conversation_write( conv, "", sys_msg_buffer, PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time( NULL ) );
@@ -1353,42 +1381,122 @@ void sending_im_msg_cb( PurpleAccount* account, const char* receiver, char** mes
 	}
 }
 
+//Array to send fpr from supply_extended_menu() to pub_key_selected_cb()
+static char**	pub_keys_fprs		= NULL;
+static long		pub_keys_fprs_num	= 0;
+
+static void clear_pub_keys_fprs() {
+	if( pub_keys_fprs_num > 0 )
+	{
+		for( long i = 0; i < pub_keys_fprs_num; i++ )
+			free( pub_keys_fprs[i] );
+		free( pub_keys_fprs );
+		pub_keys_fprs = NULL;
+		pub_keys_fprs_num = 0;
+	}
+}
+
+static void pub_key_selected_cb( PurpleBlistNode *node, int key_idx ) {
+	char* bare_jid = get_bare_jid( ((PurpleBuddy *)node)->name );
+	if( g_hash_table_lookup( list_fingerprints, bare_jid ) != NULL )
+		g_hash_table_remove( list_fingerprints, bare_jid );
+
+	const char* cur_value = purple_blist_node_get_string( node, PREF_PUB_KEY_FPR );
+	if( cur_value != NULL && EQ_STR( pub_keys_fprs[key_idx], cur_value ) ) {
+		purple_blist_node_remove_setting( node, PREF_PUB_KEY_FPR );
+		g_free( bare_jid );
+	} else {
+		purple_blist_node_set_string( node, PREF_PUB_KEY_FPR, pub_keys_fprs[key_idx] );
+		list_fingerprints_add( bare_jid, g_strdup( pub_keys_fprs[key_idx] ) );
+	}
+
+	clear_pub_keys_fprs();
+}
+
+static void supply_extended_menu( PurpleBlistNode *node, GList **menu ) {
+	if( !PURPLE_BLIST_NODE_IS_BUDDY( node ) )
+		return;
+
+	// Extract the account, and then the protocol, for this buddy
+	PurpleBuddy *buddy = (PurpleBuddy *)node;
+	if( NULL == buddy->account )
+		return;
+
+	clear_pub_keys_fprs();
+	GList* pub_keys = g_list_alloc();
+	// connect to gpgme
+	gpgme_check_version( NULL );
+	gpgme_ctx_t ctx;
+	gpgme_error_t error = gpgme_new( &ctx );
+	if( error ) {
+		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		return;
+	}
+
+	// list public keys
+	error = gpgme_op_keylist_start( ctx, NULL, 0 );
+	if( error != GPG_ERR_NO_ERROR )
+		purple_debug_error( PLUGIN_ID, "gpgme_op_keylist_start failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+	else {
+		const char* buddy_pub_key_fpr = purple_blist_node_get_string( node, PREF_PUB_KEY_FPR );
+
+		gpgme_key_t key;
+		while( gpgme_op_keylist_next( ctx, &key ) == GPG_ERR_NO_ERROR ) {
+			if( key->can_encrypt && key->can_sign )
+			{
+				// Add menu item
+				char label[100];
+				snprintf( label, sizeof(label), "(%c) %s %s", (buddy_pub_key_fpr != NULL && EQ_STR(key->subkeys->fpr, buddy_pub_key_fpr))?'*':' ', key->uids->uid, key->subkeys->fpr );
+				PurpleMenuAction *act = purple_menu_action_new( label,
+					(PurpleCallback)pub_key_selected_cb, (gpointer)pub_keys_fprs_num, NULL );
+				pub_keys = g_list_append( pub_keys, act );
+
+				// Add key to pub_keys_fprs
+				pub_keys_fprs_num++;
+				pub_keys_fprs = realloc( pub_keys_fprs, pub_keys_fprs_num * sizeof( *pub_keys_fprs ) );
+				pub_keys_fprs[pub_keys_fprs_num - 1] = strdup( key->subkeys->fpr );
+			}
+
+			gpgme_key_release( key );
+		}
+	}
+
+	// release resources
+	gpgme_release( ctx );
+
+	*menu = g_list_append( *menu, purple_menu_action_new( "GPG Public Keys", NULL, NULL, pub_keys ) );
+}
+
 /* ------------------
  * called on module load
  * ------------------ */
 static gboolean plugin_load( PurplePlugin* plugin ) {
-	void					*jabber_handle, *conv_handle;
-
 	// check if hashtable already created
 	if( list_fingerprints == NULL )
 		list_fingerprints = g_hash_table_new_full( g_str_hash, g_str_equal, g_free, list_item_destroy );
 
 	// register presence receiver handler
-	jabber_handle   = purple_plugins_find_with_id( "prpl-jabber" );
-	conv_handle     = purple_conversations_get_handle();
 
-	if( conv_handle != NULL ) {
-		purple_signal_connect( conv_handle, "conversation-created",			plugin, PURPLE_CALLBACK( conversation_created_cb ),			NULL );
-		purple_signal_connect( conv_handle, "receiving-im-msg",				plugin, PURPLE_CALLBACK( receiving_im_msg_cb ),				NULL );
-		purple_signal_connect( conv_handle, "conversation-extended-menu",	plugin, PURPLE_CALLBACK( conversation_extended_menu_cb ),	NULL );
-		purple_signal_connect( conv_handle, "sending-im-msg",				plugin, PURPLE_CALLBACK( sending_im_msg_cb ),				NULL) ;
-	} else
+	{
+	void *conv_handle = purple_conversations_get_handle();
+	if( NULL == conv_handle )
 		return FALSE;
+	purple_signal_connect( conv_handle, "conversation-created",			plugin, PURPLE_CALLBACK( conversation_created_cb ),			NULL );
+	purple_signal_connect( conv_handle, "receiving-im-msg",				plugin, PURPLE_CALLBACK( receiving_im_msg_cb ),				NULL );
+	purple_signal_connect( conv_handle, "conversation-extended-menu",	plugin, PURPLE_CALLBACK( conversation_extended_menu_cb ),	NULL );
+	purple_signal_connect( conv_handle, "sending-im-msg",				plugin, PURPLE_CALLBACK( sending_im_msg_cb ),				NULL) ;
+	}
 
-	if( jabber_handle ) {
-		purple_signal_connect( jabber_handle, "jabber-receiving-message",	plugin, PURPLE_CALLBACK( jabber_message_received ),			NULL );
-		purple_signal_connect( jabber_handle, "jabber-receiving-presence",	plugin, PURPLE_CALLBACK( jabber_presence_received ),		NULL );
-		purple_signal_connect( jabber_handle, "jabber-sending-xmlnode",		plugin, PURPLE_CALLBACK( jabber_send_signal_cb ),			NULL );
-	} else
+	{
+	void *jabber_handle = purple_plugins_find_with_id( "prpl-jabber" );
+	if( NULL == jabber_handle )
 		return FALSE;
+	purple_signal_connect( jabber_handle, "jabber-receiving-message",	plugin, PURPLE_CALLBACK( jabber_message_received ),			NULL );
+	purple_signal_connect( jabber_handle, "jabber-receiving-presence",	plugin, PURPLE_CALLBACK( jabber_presence_received ),		NULL );
+	purple_signal_connect( jabber_handle, "jabber-sending-xmlnode",		plugin, PURPLE_CALLBACK( jabber_send_signal_cb ),			NULL );
+	}
 
-	/*
-	Initialize everything needed; get the passphrase for encrypting and decrypting messages.
-	Attach to all windows the chat windows.
-	*/
-/*	attach_to_all_windows();
-	purple_signal_connect( pidgin_conversations_get_handle(), "conversation-displayed",		plugin, PURPLE_CALLBACK( conv_created ), NULL );
-	purple_signal_connect( purple_conversations_get_handle(), "conversation-extended-menu",	plugin, PURPLE_CALLBACK( conv_menu_cb ), NULL );*/
+	purple_signal_connect(purple_blist_get_handle(), "blist-node-extended-menu", plugin, PURPLE_CALLBACK(supply_extended_menu), NULL);
 
 	// initialize gpgme lib on module load
 	init_gpgme();
