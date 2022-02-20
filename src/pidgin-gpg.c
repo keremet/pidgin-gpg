@@ -28,6 +28,7 @@
 #endif
 
 #define EQ_STR( s1, s2 ) (strcmp(s1, s2) == 0)
+#define IS_EMPTY_STR( s ) (s[0] == '\0')
 
 #define PLUGIN_ID		"core-segler-pidgin-gpg"
 #define PREF_ROOT		"/plugins/core/core-segler-pidgin-gpg"
@@ -639,7 +640,6 @@ static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_
 
 	gpgme_error_t			error;
 	gpgme_data_t			plain,	cipher;
-	const char*				sender_fpr;
 	char*					cipher_str = NULL;
 	char*					cipher_str_dup = NULL;
 	size_t					len;
@@ -666,14 +666,15 @@ static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_
 	// get sender key by fingerprint, if it doesn't exist
 	if( key_arr[ 1 ] == NULL ) {
 		// check if user selected a main key
-		sender_fpr = purple_prefs_get_string( PREF_MY_KEY );
-		if( sender_fpr != NULL && strcmp( sender_fpr, "" ) != 0 ) {
+		const char* sender_fpr = purple_prefs_get_string( PREF_MY_KEY );
+		if( NULL == sender_fpr || IS_EMPTY_STR( sender_fpr ) )
+			purple_debug_error( PLUGIN_ID, "purple_prefs_get_string: PREF_MY_KEY was empty\n");
+		else {
 			// get own key by fingerprint
 			error = gpgme_get_key( *ctx, sender_fpr, &key_arr[ 1 ], 0 );
 			if( error || key_arr[ 1 ] == NULL )
 				purple_debug_error( PLUGIN_ID, "gpgme_get_key: sender key for fingerprint %s is missing! error: %s %s\n", sender_fpr, gpgme_strsource( error ), gpgme_strerror( error ) );
-		} else
-			purple_debug_error( PLUGIN_ID, "purple_prefs_get_string: PREF_MY_KEY was empty\n");
+		}
 	}
 
 	// create data containers
@@ -996,7 +997,7 @@ void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpointer unu
 
 	const char*				status_str = NULL;
 	xmlnode					*status_node, *x_node, *body_node;
-	const char				*fpr, *to;
+	const char				*to;
 	char					*sig_str, *message, *enc_str, *bare_jid;
 	struct list_item*		item;
 
@@ -1006,8 +1007,10 @@ void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpointer unu
 	//  so others know we support openpgp
 	if( g_str_equal( (*packet)->name, "presence" ) ) {
 		// check if user selected a main key
-		fpr = purple_prefs_get_string( PREF_MY_KEY );
-		if( fpr != NULL && strcmp( fpr, "" ) != 0) {
+		const char* fpr = purple_prefs_get_string( PREF_MY_KEY );
+		if( NULL == fpr || IS_EMPTY_STR( fpr ) )
+			purple_debug_info( PLUGIN_ID, "no key selecteded!\n" );
+		else {
 			// user did select a key
 			// get status message from packet
 			status_node = xmlnode_get_child( *packet, "status" );
@@ -1032,8 +1035,7 @@ void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpointer unu
 			xmlnode_set_namespace( x_node, NS_SIGNED );
 			xmlnode_insert_data( x_node, sig_str, -1 );
 			g_free( sig_str );
-		} else
-			purple_debug_info( PLUGIN_ID, "no key selecteded!\n" );
+		}
 	} else if( g_str_equal( (*packet)->name, "message" ) ) {
 		to = xmlnode_get_attrib( *packet, "to" );
 		body_node = xmlnode_get_child( *packet, "body" );
@@ -1230,26 +1232,26 @@ static void menu_action_toggle_cb( PurpleConversation* conv, void* data ) {
  * send public key to other person in conversation
  * ------------------ */
 static void menu_action_sendkey_cb( PurpleConversation* conv, void* data ) {
-	const char*				fpr;
-	char*					key = NULL;
-	PurpleConvIm*			im_data;
-
 	// check if user selected a main key
-	fpr = purple_prefs_get_string( PREF_MY_KEY );
-	if( fpr != NULL && strcmp( fpr, "" ) != 0 ) {
-		// get key
-		key = get_key_armored( fpr );
-		if( key != NULL ) {
-			// send key
-			im_data = purple_conversation_get_im_data( conv );
-			if( im_data != NULL ) {
-				purple_conv_im_send_with_flags( im_data, key, PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_INVISIBLE | PURPLE_MESSAGE_RAW );
-				purple_conversation_write( conv, "", "Public key sent!", PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time( NULL ) );
-			}
-			g_free( key );
-		}
-	} else
+	const char* fpr = purple_prefs_get_string( PREF_MY_KEY );
+	if( NULL == fpr || IS_EMPTY_STR( fpr ) ) {
 		purple_conversation_write( conv, "", "You haven't selected a personal key yet.", PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time( NULL ) );
+		return;
+	}
+
+	// get key
+	char* key = get_key_armored( fpr );
+	if( NULL == key )
+		return;
+
+	// send key
+	PurpleConvIm* im_data = purple_conversation_get_im_data( conv );
+	if( im_data != NULL ) {
+		purple_conv_im_send_with_flags( im_data, key, PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_INVISIBLE | PURPLE_MESSAGE_RAW );
+		purple_conversation_write( conv, "", "Public key sent!", PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time( NULL ) );
+	}
+
+	g_free( key );
 }
 
 /* ------------------
@@ -1297,41 +1299,41 @@ static void menu_action_retrievekey_cb( PurpleConversation* conv, void* data ) {
  * conversation extended menu
  * ------------------ */
 void conversation_extended_menu_cb( PurpleConversation* conv, GList** list ) {
-	if( conv == NULL ) {
+	if( NULL == conv ) {
 		purple_debug_error( PLUGIN_ID, "conversation_extended_menu_cb: missing conv\n" );
 		return;
 	}
-	if( list == NULL ) {
+	if( NULL == list ) {
 		purple_debug_error( PLUGIN_ID, "conversation_extended_menu_cb: missing list\n" );
 		return;
 	}
 
-	char					buffer[ 1000 ];
-	PurpleMenuAction*		action = NULL;
-	char					*bare_jid;
-	struct list_item*		item;
+	char					buffer[ 200 ];
 
 	// check if the user with the jid=conv->name has signed his presence
-	bare_jid = get_bare_jid( conv->name );
-	if( bare_jid == NULL ) {
+	char* bare_jid = get_bare_jid( conv->name );
+	if( NULL == bare_jid ) {
 		purple_debug_info( PLUGIN_ID, "conversation_extended_menu_cb: get_bare_jid failed for %s\n", conv->name );
 		return;
 	}
 
 	// get stored info about user
-	item = g_hash_table_lookup( list_fingerprints, bare_jid );
+	struct list_item* item = g_hash_table_lookup( list_fingerprints, bare_jid );
 	if( item != NULL ) {
 		// on display encryption menu item, if user sent signed presence
-		action = purple_menu_action_new( "Toggle OPENPGP encryption", PURPLE_CALLBACK( menu_action_toggle_cb ), NULL, NULL );
-		*list = g_list_append( *list, action );
+		*list = g_list_append( *list,
+			purple_menu_action_new( "Toggle OPENPGP encryption", PURPLE_CALLBACK( menu_action_toggle_cb ), NULL, NULL ) );
 
-		sprintf( buffer, "Send own public key to '%s'", bare_jid );
-		action = purple_menu_action_new( buffer, PURPLE_CALLBACK( menu_action_sendkey_cb ), NULL, NULL );
-		*list = g_list_append( *list, action );
-		
-		sprintf( buffer, "Try to retrieve key of '%s' from server", bare_jid );
-		action = purple_menu_action_new( buffer, PURPLE_CALLBACK( menu_action_retrievekey_cb ), NULL, NULL );
-		*list = g_list_append( *list, action );
+		snprintf( buffer, sizeof( buffer ), "Try to retrieve key of '%s' from server", bare_jid );
+		*list = g_list_append( *list,
+			purple_menu_action_new( buffer, PURPLE_CALLBACK( menu_action_retrievekey_cb ), NULL, NULL ) );
+	}
+
+	const char* fpr = purple_prefs_get_string( PREF_MY_KEY );
+	if( fpr != NULL && !IS_EMPTY_STR( fpr ) ) {
+		snprintf( buffer, sizeof( buffer ), "Send own public key to '%s'", bare_jid );
+		*list = g_list_append( *list,
+			purple_menu_action_new( buffer, PURPLE_CALLBACK( menu_action_sendkey_cb ), NULL, NULL ) );
 	}
 
 	// release resources
