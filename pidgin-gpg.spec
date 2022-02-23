@@ -13,7 +13,7 @@ VCS: git://git.altlinux.org/p/pidgin-gpg.git
 Source: %name-%version-%release.tar
 Source1: %name.watch
 
-BuildRequires: libgpgme-devel libpurple-devel
+BuildRequires: libgpgme-devel libpurple-devel pidgin-devel
 
 %description
 Select Tools > Plugins, and enable the GPG/OpenGPG plugin. Select

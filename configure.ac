@@ -19,7 +19,7 @@ AC_PROG_CC
 AC_SYS_LARGEFILE
 
 # Checks for libraries.
-# PKG_CHECK_MODULES([PIDGIN], [pidgin])
+PKG_CHECK_MODULES([PIDGIN], [pidgin])
 PKG_CHECK_MODULES([PURPLE], [purple])
 AM_PATH_GPGME([1.2.0])
 
