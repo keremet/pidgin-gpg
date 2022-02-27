@@ -836,20 +836,19 @@ static gboolean jabber_message_received( PurpleConnection* pc, const char* type,
 	// check if message is a key
 	xmlnode* body_node = xmlnode_get_child( parent_node, "body" );
 	if( body_node != NULL )	{
-		static const char* header = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
 		char* data = xmlnode_get_data( body_node );
 		if( data != NULL ) {
-			if( strncmp( data, header, strlen( header ) ) == 0 ) {
+			static const char header[] = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
+			if( strncmp( data, header, sizeof( header ) - 1 ) == 0 ) {
 				// if we received a ascii armored key
 				// try to import it
 				//purple_conversation_write(conv,"","received key",PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG,time(NULL));
-				if( import_key( data ) == TRUE ) {
-					xmlnode_clear_data( body_node );
-					xmlnode_insert_data( body_node, "key import ok", -1 );
-				} else {
-					xmlnode_clear_data( body_node );
-					xmlnode_insert_data( body_node, "key import failed", -1 );
-				}
+				xmlnode_clear_data( body_node );
+				xmlnode_insert_data( body_node,
+					(import_key( data ))
+						? "key import ok"
+						: "key import failed",
+					-1 );
 			} else if( xmlnode_get_child_with_namespace( parent_node, "x", NS_ENC ) == NULL ) { // unencrypted message
 				xmlnode_clear_data( body_node );
 				xmlnode_insert_data( body_node, "[Open!!!] ", -1 );
