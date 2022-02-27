@@ -1079,45 +1079,6 @@ static void menu_action_sendkey_cb( PurpleConversation* conv, void* data ) {
 }
 
 /* ------------------
- * try to retrieve key from server
- * ------------------ */
-static void menu_action_retrievekey_cb( PurpleConversation* conv, void* data ) {
-	if( conv == NULL ) {
-		purple_debug_error( PLUGIN_ID, "menu_action_retrievekey_cb: missing conv\n" );
-		return;
-	}
-
-	char					sys_msg_buffer[ 1000 ];
-	char					*bare_jid, *userid = NULL;
-	struct list_item*		item;
-
-	// check if the user with the jid=conv->name has signed his presence
-	bare_jid = get_bare_jid( conv->name );
-	if( bare_jid == NULL ) {
-		purple_debug_info( PLUGIN_ID, "menu_action_retrievekey_cb: get_bare_jid failed for %s\n", conv->name );
-		return;
-	}
-
-	// get stored info about user
-	item = g_hash_table_lookup( list_fingerprints, bare_jid );
-	if( item != NULL ) {
-		if( is_key_available( &item->ctx, item->key_arr, item->fpr, FALSE, TRUE, &userid ) == FALSE ) {
-			sprintf( sys_msg_buffer, "Did not find key with ID '%s' on keyservers.", item->fpr );
-			purple_conversation_write( conv, "", sys_msg_buffer, PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time( NULL ) );
-		} else {
-			// found key -> enable mode_enc
-			sprintf( sys_msg_buffer, "Found key with ID '%s'/'%s' for '%s' on keyservers.", item->fpr, userid, bare_jid );
-			purple_conversation_write( conv, "", sys_msg_buffer, PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time( NULL ) );
-		}
-		if( userid != NULL )
-			g_free( userid );
-	}
-
-	// release resources
-	g_free( bare_jid );
-}
-
-/* ------------------
  * conversation extended menu
  * ------------------ */
 void conversation_extended_menu_cb( PurpleConversation* conv, GList** list ) {
@@ -1130,32 +1091,13 @@ void conversation_extended_menu_cb( PurpleConversation* conv, GList** list ) {
 		return;
 	}
 
-	char					buffer[ 200 ];
-
-	// check if the user with the jid=conv->name has signed his presence
-	char* bare_jid = get_bare_jid( conv->name );
-	if( NULL == bare_jid ) {
-		purple_debug_info( PLUGIN_ID, "conversation_extended_menu_cb: get_bare_jid failed for %s\n", conv->name );
-		return;
-	}
-
-	// get stored info about user
-	struct list_item* item = g_hash_table_lookup( list_fingerprints, bare_jid );
-	if( item != NULL ) {
-		snprintf( buffer, sizeof( buffer ), "Try to retrieve key of '%s' from server", bare_jid );
-		*list = g_list_append( *list,
-			purple_menu_action_new( buffer, PURPLE_CALLBACK( menu_action_retrievekey_cb ), NULL, NULL ) );
-	}
-
 	const char* fpr = purple_prefs_get_string( PREF_MY_KEY );
 	if( fpr != NULL && !IS_EMPTY_STR( fpr ) ) {
-		snprintf( buffer, sizeof( buffer ), "Send own public key to '%s'", bare_jid );
+		char buffer[ 200 ];
+		snprintf( buffer, sizeof( buffer ), "Send own public key to '%s'", conv->name );
 		*list = g_list_append( *list,
 			purple_menu_action_new( buffer, PURPLE_CALLBACK( menu_action_sendkey_cb ), NULL, NULL ) );
 	}
-
-	// release resources
-	g_free( bare_jid );
 }
 
 
