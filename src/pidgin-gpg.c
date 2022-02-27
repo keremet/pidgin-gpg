@@ -1158,97 +1158,100 @@ void conversation_extended_menu_cb( PurpleConversation* conv, GList** list ) {
 	g_free( bare_jid );
 }
 
-//Array to send fpr from supply_extended_menu() to pub_key_selected_cb()
-static char**	pub_keys_fprs		= NULL;
-static long		pub_keys_fprs_num	= 0;
-
-static void clear_pub_keys_fprs() {
-	if( pub_keys_fprs_num > 0 )
-	{
-		for( long i = 0; i < pub_keys_fprs_num; i++ )
-			free( pub_keys_fprs[i] );
-		free( pub_keys_fprs );
-		pub_keys_fprs = NULL;
-		pub_keys_fprs_num = 0;
-	}
-}
-
-static void pub_key_selected_cb( PurpleBlistNode *node, int key_idx ) {
-	char* bare_jid = get_bare_jid( ((PurpleBuddy *)node)->name );
-	if( g_hash_table_lookup( list_fingerprints, bare_jid ) != NULL )
-		g_hash_table_remove( list_fingerprints, bare_jid );
-
-	const char* cur_value = purple_blist_node_get_string( node, PREF_PUB_KEY_FPR );
-	if( cur_value != NULL && EQ_STR( pub_keys_fprs[key_idx], cur_value ) ) {
-		purple_blist_node_remove_setting( node, PREF_PUB_KEY_FPR );
-		g_free( bare_jid );
-	} else {
-		purple_blist_node_set_string( node, PREF_PUB_KEY_FPR, pub_keys_fprs[key_idx] );
-		list_fingerprints_add( bare_jid, g_strdup( pub_keys_fprs[key_idx] ) );
-	}
-
-	clear_pub_keys_fprs();
-}
-
-static void supply_extended_menu( PurpleBlistNode *node, GList **menu ) {
-	if( !PURPLE_BLIST_NODE_IS_BUDDY( node ) )
-		return;
-
-	// Extract the account, and then the protocol, for this buddy
-	PurpleBuddy *buddy = (PurpleBuddy *)node;
-	if( NULL == buddy->account )
-		return;
-
-	clear_pub_keys_fprs();
-	GList* pub_keys = g_list_alloc();
-	// connect to gpgme
-	gpgme_check_version( NULL );
-	gpgme_ctx_t ctx;
-	gpgme_error_t error = gpgme_new( &ctx );
-	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
-		return;
-	}
-
-	// list public keys
-	error = gpgme_op_keylist_start( ctx, NULL, 0 );
-	if( error != GPG_ERR_NO_ERROR )
-		purple_debug_error( PLUGIN_ID, "gpgme_op_keylist_start failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
-	else {
-		const char* buddy_pub_key_fpr = purple_blist_node_get_string( node, PREF_PUB_KEY_FPR );
-
-		gpgme_key_t key;
-		while( gpgme_op_keylist_next( ctx, &key ) == GPG_ERR_NO_ERROR ) {
-			if( key->can_encrypt && key->can_sign )
-			{
-				// Add menu item
-				char label[100];
-				snprintf( label, sizeof(label), "(%c) %s %s", (buddy_pub_key_fpr != NULL && EQ_STR(key->subkeys->fpr, buddy_pub_key_fpr))?'*':' ', key->uids->uid, key->subkeys->fpr );
-				PurpleMenuAction *act = purple_menu_action_new( label,
-					(PurpleCallback)pub_key_selected_cb, (gpointer)pub_keys_fprs_num, NULL );
-				pub_keys = g_list_append( pub_keys, act );
-
-				// Add key to pub_keys_fprs
-				pub_keys_fprs_num++;
-				pub_keys_fprs = realloc( pub_keys_fprs, pub_keys_fprs_num * sizeof( *pub_keys_fprs ) );
-				pub_keys_fprs[pub_keys_fprs_num - 1] = strdup( key->subkeys->fpr );
-			}
-
-			gpgme_key_release( key );
-		}
-	}
-
-	// release resources
-	gpgme_release( ctx );
-
-	*menu = g_list_append( *menu, purple_menu_action_new( "GPG Public Keys", NULL, NULL, pub_keys ) );
-}
 
 static void check_bnt_enabled_toggled( GtkWidget *widget, PurpleConversation *conv ) {
 	// tell user, that we toggled mode
 	purple_conversation_write( conv, "",
 		gtk_toggle_button_get_active( GTK_TOGGLE_BUTTON( widget ) ) ? "Encryption enabled" : "Encryption disabled",
 		PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time( NULL ) );
+}
+
+static void pub_key_selected_cb( GtkCheckMenuItem *checkmenuitem, PurpleConversation *conv) {
+	char* bare_jid = get_bare_jid( conv->name );
+	if( g_hash_table_lookup( list_fingerprints, bare_jid ) != NULL )
+		g_hash_table_remove( list_fingerprints, bare_jid );
+
+	PurpleBuddy *buddy = purple_find_buddy( purple_conversation_get_account( conv ), conv->name );
+	if( NULL == buddy ) {
+		purple_debug_error( PLUGIN_ID, "buddy %s not found\n", conv->name );
+		g_free( bare_jid );
+		return;
+	}
+
+	const char* cur_value = purple_blist_node_get_string( &buddy->node, PREF_PUB_KEY_FPR );
+	const char* lbl = gtk_menu_item_get_label( GTK_MENU_ITEM(checkmenuitem) );
+	const char* last_space = strrchr( lbl, ' ' );
+	if (NULL == last_space) {
+		g_free( bare_jid );
+		return;
+	}
+
+	const char* new_value = last_space + 1;
+	GtkWidget* check_bnt = (GtkWidget*)purple_conversation_get_data( conv, GPG_CHECK_BTN_ENCR_ENABLED );
+	if( cur_value != NULL && EQ_STR( new_value, cur_value ) ) {
+		purple_blist_node_remove_setting( &buddy->node, PREF_PUB_KEY_FPR );
+		g_free( bare_jid );
+		gtk_toggle_button_set_active( GTK_TOGGLE_BUTTON( check_bnt ), FALSE );
+		gtk_widget_set_sensitive( check_bnt, FALSE );
+	} else {
+		gtk_toggle_button_set_active( GTK_TOGGLE_BUTTON( check_bnt ), TRUE );
+		gtk_widget_set_sensitive( check_bnt, TRUE );
+		purple_blist_node_set_string( &buddy->node, PREF_PUB_KEY_FPR, new_value );
+		list_fingerprints_add( bare_jid, g_strdup( new_value ) );
+	}
+}
+
+static gboolean pub_key_bnt_pressed( GtkWidget *w, GdkEventButton *event, PurpleConversation *conv ) {
+	/* Any button will do */
+	if( event->type != GDK_BUTTON_PRESS )
+		return FALSE;
+
+	// connect to gpgme
+	gpgme_check_version( NULL );
+	gpgme_ctx_t ctx;
+	gpgme_error_t error = gpgme_new( &ctx );
+	if( error ) {
+		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		return TRUE;
+	}
+
+	// list public keys
+	error = gpgme_op_keylist_start( ctx, NULL, 0 );
+	if( error != GPG_ERR_NO_ERROR ) {
+		purple_debug_error( PLUGIN_ID, "gpgme_op_keylist_start failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		return TRUE;
+	}
+
+	PurpleBuddy *buddy = purple_find_buddy( purple_conversation_get_account( conv ), conv->name );
+	if( NULL == buddy ) {
+		purple_debug_error( PLUGIN_ID, "buddy %s not found\n", conv->name );
+		return TRUE;
+	}
+
+	GtkWidget *menu = gtk_menu_new();
+	const char* pub_key_fpr = purple_blist_node_get_string( &buddy->node, PREF_PUB_KEY_FPR );
+	gpgme_key_t key;
+	while( gpgme_op_keylist_next( ctx, &key ) == GPG_ERR_NO_ERROR ) {
+		if( key->can_encrypt && key->can_sign )
+		{
+			// Add menu item
+			char label[100];
+			// fingerprint will be used in pub_key_selected_cb from label. So label format matters
+			snprintf( label, sizeof(label), "%s %s", key->uids->uid, key->subkeys->fpr );
+
+			GtkWidget* memu_item = gtk_check_menu_item_new_with_label( label );
+			gtk_check_menu_item_set_active( GTK_CHECK_MENU_ITEM( memu_item ),
+					(pub_key_fpr != NULL && EQ_STR(key->subkeys->fpr, pub_key_fpr)) );
+			g_signal_connect( G_OBJECT( memu_item ), "toggled", G_CALLBACK(pub_key_selected_cb), conv );
+			gtk_menu_shell_append( GTK_MENU_SHELL( menu ), memu_item );
+		}
+
+		gpgme_key_release( key );
+	}
+
+	gtk_widget_show_all( menu );
+	gtk_menu_popup( GTK_MENU(menu), NULL, NULL, NULL, NULL, 3, event->time );
+	return TRUE;
 }
 
 /* If the conversation switches on us */
@@ -1324,6 +1327,11 @@ static void conversation_switched( PurpleConversation *conv, void * data ) {
 
 	// after gtk_toggle_button_set_active to avoid two messages
 	g_signal_connect (check_bnt, "toggled", G_CALLBACK (check_bnt_enabled_toggled), conv);
+
+	GtkWidget* pub_key_bnt = gtk_button_new_with_label( "Select GPG pub key" );
+	gtk_box_pack_start( GTK_BOX( gtkconv->toolbar ), pub_key_bnt, FALSE, FALSE, 0 );
+	g_signal_connect( G_OBJECT( pub_key_bnt ), "button-press-event", G_CALLBACK(pub_key_bnt_pressed), conv );
+	gtk_widget_show( pub_key_bnt );
 }
 
 /* ------------------
@@ -1352,7 +1360,6 @@ static gboolean plugin_load( PurplePlugin* plugin ) {
 	purple_signal_connect( jabber_handle, "jabber-sending-xmlnode",		plugin, PURPLE_CALLBACK( jabber_send_signal_cb ),			NULL );
 	}
 
-	purple_signal_connect(purple_blist_get_handle(), "blist-node-extended-menu", plugin, PURPLE_CALLBACK(supply_extended_menu), NULL);
 	purple_signal_connect(pidgin_conversations_get_handle(), "conversation-switched", plugin, PURPLE_CALLBACK(conversation_switched), NULL);
 
 	// initialize gpgme lib on module load
