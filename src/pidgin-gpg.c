@@ -724,16 +724,8 @@ static char* decrypt( const char* cipher_str ) {
 		return NULL;
 	}
 
-	gpgme_error_t			error;
-	gpgme_ctx_t				ctx;
-	gpgme_data_t			plain,	cipher;
-	size_t					len = 0;
-	char*					plain_str = NULL;
-	char*					plain_str_dup = NULL;
-	char*					armored_buffer;
-
 	// add header and footer:
-	armored_buffer = str_pgp_wrap( cipher_str, FALSE );
+	char* armored_buffer = str_pgp_wrap( cipher_str, FALSE );
 	if( armored_buffer == NULL ) {
 		purple_debug_error( PLUGIN_ID, "str_pgp_wrap failed: could not wrap message\n" );
 		return NULL;
@@ -741,7 +733,8 @@ static char* decrypt( const char* cipher_str ) {
 
 	// connect to gpgme
 	gpgme_check_version( NULL );
-	error = gpgme_new( &ctx );
+	gpgme_ctx_t ctx;
+	gpgme_error_t error = gpgme_new( &ctx );
 	if( error ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		g_free( armored_buffer );
@@ -749,6 +742,7 @@ static char* decrypt( const char* cipher_str ) {
 	}
 
 	// create data containers
+	gpgme_data_t cipher;
 	error = gpgme_data_new_from_mem( &cipher, armored_buffer, strlen( armored_buffer ), 0 );
 	if( error ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
@@ -756,6 +750,7 @@ static char* decrypt( const char* cipher_str ) {
 		gpgme_release( ctx );
 		return NULL;
 	}
+	gpgme_data_t plain;
 	error = gpgme_data_new( &plain );
 	if( error ) {
 		purple_debug_error( PLUGIN_ID, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
@@ -778,11 +773,18 @@ static char* decrypt( const char* cipher_str ) {
 
 	// release memory for data containers
 	gpgme_data_release( cipher );
-	plain_str = gpgme_data_release_and_get_mem( plain, &len );
+
+	char* plain_str_dup = NULL;
+	size_t len = 0;
+	char* plain_str = gpgme_data_release_and_get_mem( plain, &len );
 	if( plain_str != NULL ) {
-		if( len > 0 && ( plain_str_dup = g_malloc( len + 1 ) ) != NULL ) {
-			strncpy( plain_str_dup, plain_str, len );
-			plain_str_dup[ len ] = 0;
+		if( len > 0 ) {
+			static const char encr_indicator[] = "[E] ";
+			plain_str_dup = g_malloc( (sizeof(encr_indicator) - 1) + len + 1 );
+			if( plain_str_dup != NULL ) {
+				strcpy( plain_str_dup, encr_indicator );
+				strlcpy( plain_str_dup + sizeof(encr_indicator) - 1, plain_str, len + 1 );
+			}
 		}
 		gpgme_free( plain_str );
 	}
@@ -848,6 +850,10 @@ static gboolean jabber_message_received( PurpleConnection* pc, const char* type,
 					xmlnode_clear_data( body_node );
 					xmlnode_insert_data( body_node, "key import failed", -1 );
 				}
+			} else if( xmlnode_get_child_with_namespace( parent_node, "x", NS_ENC ) == NULL ) { // unencrypted message
+				xmlnode_clear_data( body_node );
+				xmlnode_insert_data( body_node, "[Open!!!] ", -1 );
+				xmlnode_insert_data( body_node, data, -1 );
 			}
 
 			g_free(data);
