@@ -23,12 +23,6 @@
 #define EQ_STR( s1, s2 ) (strcmp(s1, s2) == 0)
 #define IS_EMPTY_STR( s ) (s[0] == '\0')
 
-#define PLUGIN_ID		"core-segler-pidgin-gpg"
-#define PREF_ROOT		"/plugins/core/core-segler-pidgin-gpg"
-#define PREF_MY_KEY		"/plugins/core/core-segler-pidgin-gpg/my_key_fpr"
-#define GPG_CHECK_BTN_ENCR_ENABLED	"gpg-check-bnt-ecnr-enabled"
-#define PREF_PUB_KEY_FPR	"GPG/pub_key_fpr"
-
 #include				"../config.h"
 
 #include				<locale.h>
@@ -48,6 +42,12 @@
 
 static GHashTable*		list_fingerprints = NULL;
 
+static const char*		GPG_CHECK_BTN_ENCR_ENABLED	= "gpg-check-bnt-ecnr-enabled";
+
+static const char*		PREF_ROOT		= "/plugins/core/core-segler-pidgin-gpg";
+static const char*		PREF_MY_KEY		= "/plugins/core/core-segler-pidgin-gpg/my_key_fpr";
+static const char*		PREF_PUB_KEY_FPR= "GPG/pub_key_fpr";
+
 static const char*		NS_SIGNED		= "jabber:x:signed";
 static const char*		NS_ENC			= "jabber:x:encrypted";
 static const char*		NS_XMPP_CARBONS	= "urn:xmpp:carbons:2";
@@ -55,6 +55,41 @@ static const char*		PGP_MSG_HEADER	= "-----BEGIN PGP MESSAGE-----";
 static const char*		PGP_MSG_FOOTER	= "-----END PGP MESSAGE-----";
 static const char*		PGP_SIG_HEADER	= "-----BEGIN PGP SIGNATURE-----";
 static const char*		PGP_SIG_FOOTER	= "-----END PGP SIGNATURE-----";
+
+/* ------------------
+ * The plugin ui info struct for preferences dialog
+ * ------------------ */
+static PurplePluginPrefFrame* get_plugin_pref_frame( PurplePlugin* plugin );
+static PurplePluginUiInfo prefs_info = {
+	.get_plugin_pref_frame = get_plugin_pref_frame
+};
+
+/* ------------------
+ * The plugin info struct
+ * ------------------ */
+static gboolean plugin_load( PurplePlugin* plugin );
+static PurplePluginInfo info = {
+	.magic = PURPLE_PLUGIN_MAGIC,
+	.major_version = PURPLE_MAJOR_VERSION,
+	.minor_version = PURPLE_MINOR_VERSION,
+	.type = PURPLE_PLUGIN_STANDARD,
+	.priority = PURPLE_PRIORITY_DEFAULT,
+
+	.id = "core-segler-pidgin-gpg",
+	.name = "GPG/OPENPGP (XEP-0027)",
+	.version = "0.9",
+
+	.summary = "GPG Plugin for Pidgin",
+	.description = "Simple GPG Plugin for Pidgin.",
+	.author = "Andrey Sokolov <keremet@solaris.kirov.ru>",
+	.homepage = "https://github.com/keremet/pidgin-gpg",
+
+	.load = plugin_load,
+	.unload = NULL,
+	.destroy = NULL,
+
+	.prefs_info = &prefs_info
+};
 
 /* ------------------
  * internal item definition for list_fingerprints
@@ -134,7 +169,7 @@ void xmlnode_clear_data( xmlnode *node ) {
  * ------------------ */
 static char* str_pgp_wrap( const char* unwrappedBuffer, gboolean asSignature ) {
 	if( unwrappedBuffer == NULL ) {
-		purple_debug_error( PLUGIN_ID, "str_pgp_wrap: missing unwrappedBuffer\n" );
+		purple_debug_error( info.id, "str_pgp_wrap: missing unwrappedBuffer\n" );
 		return NULL;
 	}
 
@@ -167,7 +202,7 @@ static char* str_pgp_wrap( const char* unwrappedBuffer, gboolean asSignature ) {
  * ------------------ */
 static char* str_pgp_unwrap( const char* wrappedBuffer ) {
 	if( wrappedBuffer == NULL ) {
-		purple_debug_error( PLUGIN_ID, "str_pgp_unwrap: missing wrappedBuffer\n" );
+		purple_debug_error( info.id, "str_pgp_unwrap: missing wrappedBuffer\n" );
 		return NULL;
 	}
 
@@ -226,7 +261,7 @@ static char* str_pgp_unwrap( const char* wrappedBuffer ) {
  * ------------------ */
 static char* get_bare_jid( const char* jid ) {
 	if( jid == NULL ) {
-		purple_debug_error( PLUGIN_ID, "get_bare_jid: missing jid\n" );
+		purple_debug_error( info.id, "get_bare_jid: missing jid\n" );
 		return NULL;
 	}
 
@@ -245,15 +280,15 @@ static char* get_bare_jid( const char* jid ) {
  * ------------------ */
 int is_key_available( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* fpr, int secret, int servermode, char** userid ) {
 	if( ctx == NULL ) {
-		purple_debug_error( PLUGIN_ID, "is_key_available: missing ctx\n" );
+		purple_debug_error( info.id, "is_key_available: missing ctx\n" );
 		return FALSE;
 	}
 	if( key_arr == NULL ) {
-		purple_debug_error( PLUGIN_ID, "is_key_available: missing key_arr\n" );
+		purple_debug_error( info.id, "is_key_available: missing key_arr\n" );
 		return FALSE;
 	}
 	if( fpr == NULL ) {
-		purple_debug_error( PLUGIN_ID, "is_key_available: missing fpr\n" );
+		purple_debug_error( info.id, "is_key_available: missing fpr\n" );
 		return FALSE;
 	}
 
@@ -265,7 +300,7 @@ int is_key_available( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* fpr, i
 		gpgme_check_version( NULL );
 		error = gpgme_new( ctx );
 		if( error ){
-			purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+			purple_debug_error( info.id, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 			return FALSE;
 		}
 	}
@@ -274,7 +309,7 @@ int is_key_available( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* fpr, i
 	if( key_arr[ 0 ] == NULL ) {
 		// set to server search mode if servermode == TRUE
 		if( servermode == TRUE ) {
-			purple_debug_info( PLUGIN_ID, "set keylist mode to server\n" );
+			purple_debug_info( info.id, "set keylist mode to server\n" );
 			current_keylist_mode = gpgme_get_keylist_mode( *ctx );
 			gpgme_set_keylist_mode( *ctx, ( current_keylist_mode | GPGME_KEYLIST_MODE_EXTERN ) & ( ~GPGME_KEYLIST_MODE_LOCAL ) );
 		}
@@ -282,21 +317,21 @@ int is_key_available( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* fpr, i
 		// get key by fingerprint
 		error = gpgme_get_key( *ctx, fpr, &key_arr[ 0 ], secret );
 		if( error || key_arr[ 0 ] == NULL ) {
-			purple_debug_error( PLUGIN_ID, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+			purple_debug_error( info.id, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 			return FALSE;
 		}
 
 		// in server mode
 		if( servermode == TRUE ) {
 			// unset server search mode
-			purple_debug_info( PLUGIN_ID, "set keylist mode to server\n" );
+			purple_debug_info( info.id, "set keylist mode to server\n" );
 			current_keylist_mode = gpgme_get_keylist_mode( *ctx );
 			gpgme_set_keylist_mode( *ctx, ( current_keylist_mode | GPGME_KEYLIST_MODE_LOCAL ) & ( ~GPGME_KEYLIST_MODE_EXTERN ) );
 
 			// import the key
 			error = gpgme_op_import_keys( *ctx, key_arr );
 			if( error ) {
-				purple_debug_error( PLUGIN_ID, "gpgme_op_import_keys failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+				purple_debug_error( info.id, "gpgme_op_import_keys failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 				return FALSE;
 			}
 		}
@@ -316,7 +351,7 @@ int is_key_available( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* fpr, i
  * ------------------ */
 char* get_key_armored( const char* fpr ) {
 	if( fpr == NULL ) {
-		purple_debug_error( PLUGIN_ID, "get_key_armored: missing fpr\n" );
+		purple_debug_error( info.id, "get_key_armored: missing fpr\n" );
 		return NULL;
 	}
 
@@ -334,14 +369,14 @@ char* get_key_armored( const char* fpr ) {
 	gpgme_check_version( NULL );
 	error = gpgme_new( &ctx );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		return NULL;
 	}
 
 	// get key by fingerprint
 	error = gpgme_get_key( ctx, fpr, &key_arr[ 0 ], 0 );
 	if( error || key_arr[ 0 ] == NULL ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_release( ctx );
 		return NULL;
 	}
@@ -349,7 +384,7 @@ char* get_key_armored( const char* fpr ) {
 	// create data containers
 	error = gpgme_data_new( &key_data );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_key_release( key_arr[ 0 ] );
 		gpgme_release( ctx );
 		return NULL;
@@ -359,7 +394,7 @@ char* get_key_armored( const char* fpr ) {
 	gpgme_set_armor( ctx, 1 );
 	error = gpgme_op_export_keys( ctx, key_arr, 0, key_data );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_op_export_keys failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_op_export_keys failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( key_data );
 		gpgme_key_release( key_arr[ 0 ] );
 		gpgme_release( ctx );
@@ -389,7 +424,7 @@ char* get_key_armored( const char* fpr ) {
  * ------------------ */
 int import_key( const char* armored_key ) {
 	if( armored_key == NULL ) {
-		purple_debug_error( PLUGIN_ID, "import_key: missing armored_key\n" );
+		purple_debug_error( info.id, "import_key: missing armored_key\n" );
 		return FALSE;
 	}
 
@@ -402,15 +437,15 @@ int import_key( const char* armored_key ) {
 	gpgme_check_version( NULL );
 	error = gpgme_new( &ctx );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		return FALSE;
 	}
 
-	purple_debug_info( PLUGIN_ID, "try to import key: %s\n", armored_key );
+	purple_debug_info( info.id, "try to import key: %s\n", armored_key );
 	// create data containers
 	error = gpgme_data_new_from_mem( &keydata, armored_key, strlen( armored_key ), 1 );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_release( ctx );
 		return FALSE;
 	}
@@ -419,14 +454,14 @@ int import_key( const char* armored_key ) {
 	gpgme_set_armor( ctx, 1 );
 	error =  gpgme_op_import( ctx, keydata );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_op_import: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_op_import: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( keydata );
 		gpgme_release( ctx );
 		return FALSE;
 	}
 
 	result = gpgme_op_import_result( ctx );
-	purple_debug_info( PLUGIN_ID, "considered keys: %d; imported keys: %d; not imported keys: %d\n", result->considered, result->imported, result->not_imported );
+	purple_debug_info( info.id, "considered keys: %d; imported keys: %d; not imported keys: %d\n", result->considered, result->imported, result->not_imported );
 
 	// release resources
 	gpgme_data_release( keydata );
@@ -441,11 +476,11 @@ int import_key( const char* armored_key ) {
  * ------------------ */
 static char* sign( const char* plain_str, const char* fpr ) {
 	if( plain_str == NULL ) {
-		purple_debug_error( PLUGIN_ID, "sign: missing plain_str\n" );
+		purple_debug_error( info.id, "sign: missing plain_str\n" );
 		return NULL;
 	}
 	if( fpr == NULL ) {
-		purple_debug_error( PLUGIN_ID, "sign: missing fpr\n" );
+		purple_debug_error( info.id, "sign: missing fpr\n" );
 		return NULL;
 	}
 
@@ -461,14 +496,14 @@ static char* sign( const char* plain_str, const char* fpr ) {
 	gpgme_check_version( NULL );
 	error = gpgme_new( &ctx );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		return NULL;
 	}
 
 	// get key by fingerprint
 	error = gpgme_get_key( ctx, fpr, &key, 1 );
 	if( error || key == NULL ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_release( ctx );
 		return NULL;
 	}
@@ -477,7 +512,7 @@ static char* sign( const char* plain_str, const char* fpr ) {
 	gpgme_signers_clear( ctx );
 	error = gpgme_signers_add( ctx, key );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_signers_add failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_signers_add failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_key_release( key );
 		gpgme_release( ctx );
 		return NULL;
@@ -488,13 +523,13 @@ static char* sign( const char* plain_str, const char* fpr ) {
 	// create data containers
 	error = gpgme_data_new_from_mem( &plain, plain_str, strlen( plain_str ), 1 );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_release( ctx );
 		return NULL;
 	}
 	error = gpgme_data_new( &sig );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( plain );
 		gpgme_release( ctx );
 		return NULL;
@@ -504,7 +539,7 @@ static char* sign( const char* plain_str, const char* fpr ) {
 	gpgme_set_armor( ctx, 1 );
 	error = gpgme_op_sign( ctx, plain, sig, GPGME_SIG_MODE_DETACH );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_op_sign failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_op_sign failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( sig );
 		gpgme_data_release( plain );
 		gpgme_release( ctx );
@@ -536,7 +571,7 @@ static char* sign( const char* plain_str, const char* fpr ) {
  * ------------------ */
 static char* verify( const char* sig_str ) {
 	if( sig_str == NULL ) {
-		purple_debug_error( PLUGIN_ID, "verify: missing sig_str\n" );
+		purple_debug_error( info.id, "verify: missing sig_str\n" );
 		return NULL;
 	}
 
@@ -551,14 +586,14 @@ static char* verify( const char* sig_str ) {
 	gpgme_check_version( NULL );
 	error = gpgme_new( &ctx );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		return NULL;
 	}
 
 	// armor sig_str
 	armored_sig_str = str_pgp_wrap( sig_str, TRUE );
 	if( armored_sig_str == NULL ) {
-		purple_debug_error( PLUGIN_ID, "str_pgp_wrap failed: could not wrap signature\n" );
+		purple_debug_error( info.id, "str_pgp_wrap failed: could not wrap signature\n" );
 		gpgme_release( ctx );
 		return NULL;
 	}
@@ -566,14 +601,14 @@ static char* verify( const char* sig_str ) {
 	// create data containers
 	error = gpgme_data_new_from_mem( &sig, armored_sig_str, strlen( armored_sig_str ), 0 );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		g_free( armored_sig_str );
 		gpgme_release( ctx );
 		return NULL;
 	}
 	error = gpgme_data_new( &plain );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( sig );
 		g_free( armored_sig_str );
 		gpgme_release( ctx );
@@ -583,7 +618,7 @@ static char* verify( const char* sig_str ) {
 	// try to verify
 	error = gpgme_op_verify( ctx, sig, NULL, plain );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_op_verify failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_op_verify failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( sig );
 		gpgme_data_release( plain );
 		g_free( armored_sig_str );
@@ -613,19 +648,19 @@ static char* verify( const char* sig_str ) {
  * ------------------ */
 static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_str, const char* fpr ) {
 	if( ctx == NULL ) {
-		purple_debug_error( PLUGIN_ID, "encrypt: missing ctx\n" );
+		purple_debug_error( info.id, "encrypt: missing ctx\n" );
 		return NULL;
 	}
 	if( key_arr == NULL ) {
-		purple_debug_error( PLUGIN_ID, "encrypt: missing key_arr\n" );
+		purple_debug_error( info.id, "encrypt: missing key_arr\n" );
 		return NULL;
 	}
 	if( plain_str == NULL ) {
-		purple_debug_error( PLUGIN_ID, "encrypt: missing plain_str\n" );
+		purple_debug_error( info.id, "encrypt: missing plain_str\n" );
 		return NULL;
 	}
 	if( fpr == NULL ) {
-		purple_debug_error( PLUGIN_ID, "encrypt: missing fpr\n" );
+		purple_debug_error( info.id, "encrypt: missing fpr\n" );
 		return NULL;
 	}
 
@@ -640,7 +675,7 @@ static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_
 		gpgme_check_version( NULL );
 		error = gpgme_new( ctx );
 		if( error ) {
-			purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+			purple_debug_error( info.id, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 			return NULL;
 		}
 	}
@@ -649,7 +684,7 @@ static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_
 	if( key_arr[ 0 ] == NULL ) {
 		error = gpgme_get_key( *ctx, fpr, &key_arr[ 0 ], 0 );
 		if( error || key_arr[ 0 ] == NULL ) {
-			purple_debug_error( PLUGIN_ID, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+			purple_debug_error( info.id, "gpgme_get_key failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 			return NULL;
 		}
 	}
@@ -659,24 +694,24 @@ static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_
 		// check if user selected a main key
 		const char* sender_fpr = purple_prefs_get_string( PREF_MY_KEY );
 		if( NULL == sender_fpr || IS_EMPTY_STR( sender_fpr ) )
-			purple_debug_error( PLUGIN_ID, "purple_prefs_get_string: PREF_MY_KEY was empty\n");
+			purple_debug_error( info.id, "purple_prefs_get_string: PREF_MY_KEY was empty\n");
 		else {
 			// get own key by fingerprint
 			error = gpgme_get_key( *ctx, sender_fpr, &key_arr[ 1 ], 0 );
 			if( error || key_arr[ 1 ] == NULL )
-				purple_debug_error( PLUGIN_ID, "gpgme_get_key: sender key for fingerprint %s is missing! error: %s %s\n", sender_fpr, gpgme_strsource( error ), gpgme_strerror( error ) );
+				purple_debug_error( info.id, "gpgme_get_key: sender key for fingerprint %s is missing! error: %s %s\n", sender_fpr, gpgme_strsource( error ), gpgme_strerror( error ) );
 		}
 	}
 
 	// create data containers
 	error = gpgme_data_new_from_mem( &plain, plain_str, strlen( plain_str ), 1 );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		return NULL;
 	}
 	error = gpgme_data_new( &cipher );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( plain );
 		return NULL;
 	}
@@ -685,7 +720,7 @@ static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_
 	gpgme_set_armor( *ctx, 1 );
 	error = gpgme_op_encrypt( *ctx, key_arr, GPGME_ENCRYPT_ALWAYS_TRUST, plain, cipher );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_op_encrypt failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_op_encrypt failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( cipher );
 		gpgme_data_release( plain );
 		return NULL;
@@ -697,7 +732,7 @@ static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_
 	if( cipher_str != NULL ) {
 		cipher_str_dup = str_pgp_unwrap( cipher_str );
 		if( cipher_str_dup == NULL ) {
-			purple_debug_error( PLUGIN_ID, "str_pgp_unwrap failed, the armored message seems to be incorrect: %s\n", cipher_str );
+			purple_debug_error( info.id, "str_pgp_unwrap failed, the armored message seems to be incorrect: %s\n", cipher_str );
 			gpgme_free( cipher_str );
 			return NULL;
 		}
@@ -713,14 +748,14 @@ static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_
  * ------------------ */
 static char* decrypt( const char* cipher_str ) {
 	if( cipher_str == NULL ) {
-		purple_debug_error( PLUGIN_ID, "decrypt: missing cipher_str\n" );
+		purple_debug_error( info.id, "decrypt: missing cipher_str\n" );
 		return NULL;
 	}
 
 	// add header and footer:
 	char* armored_buffer = str_pgp_wrap( cipher_str, FALSE );
 	if( armored_buffer == NULL ) {
-		purple_debug_error( PLUGIN_ID, "str_pgp_wrap failed: could not wrap message\n" );
+		purple_debug_error( info.id, "str_pgp_wrap failed: could not wrap message\n" );
 		return NULL;
 	}
 
@@ -729,7 +764,7 @@ static char* decrypt( const char* cipher_str ) {
 	gpgme_ctx_t ctx;
 	gpgme_error_t error = gpgme_new( &ctx );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		g_free( armored_buffer );
 		return NULL;
 	}
@@ -738,7 +773,7 @@ static char* decrypt( const char* cipher_str ) {
 	gpgme_data_t cipher;
 	error = gpgme_data_new_from_mem( &cipher, armored_buffer, strlen( armored_buffer ), 0 );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_data_new_from_mem failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		g_free( armored_buffer );
 		gpgme_release( ctx );
 		return NULL;
@@ -746,7 +781,7 @@ static char* decrypt( const char* cipher_str ) {
 	gpgme_data_t plain;
 	error = gpgme_data_new( &plain );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_data_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( cipher );
 		g_free( armored_buffer );
 		gpgme_release( ctx );
@@ -756,7 +791,7 @@ static char* decrypt( const char* cipher_str ) {
 	// decrypt
 	error = gpgme_op_decrypt( ctx, cipher, plain );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_op_decrypt failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_op_decrypt failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		gpgme_data_release( cipher );
 		gpgme_data_release( plain );
 		g_free( armored_buffer );
@@ -798,7 +833,7 @@ static void init_gpgme () {
 	/* Initialize the locale environment.  */
 	setlocale( LC_ALL, "" );
 	version = gpgme_check_version( NULL );
-	purple_debug_info( PLUGIN_ID, "Found gpgme version: %s\n", version );
+	purple_debug_info( info.id, "Found gpgme version: %s\n", version );
 
 	gpgme_set_locale( NULL, LC_CTYPE, setlocale( LC_CTYPE, NULL ) );
 	// For W32 portability.
@@ -812,15 +847,15 @@ static void init_gpgme () {
  * ------------------ */
 static gboolean jabber_message_received( PurpleConnection* pc, const char* type, const char* id, const char* from, const char* to, xmlnode* message ) {
 	if( NULL == pc ) {
-		purple_debug_error( PLUGIN_ID, "jabber_message_received: missing pc\n" );
+		purple_debug_error( info.id, "jabber_message_received: missing pc\n" );
 		return FALSE;
 	}
 	if( NULL == from ) {
-		purple_debug_error( PLUGIN_ID, "jabber_message_received: missing from\n" );
+		purple_debug_error( info.id, "jabber_message_received: missing from\n" );
 		return FALSE;
 	}
 	if( NULL == message ) {
-		purple_debug_error( PLUGIN_ID, "jabber_message_received: missing message\n" );
+		purple_debug_error( info.id, "jabber_message_received: missing message\n" );
 		return FALSE;
 	}
 
@@ -857,19 +892,19 @@ static gboolean jabber_message_received( PurpleConnection* pc, const char* type,
 	if( NULL == x_node )
 		return FALSE;
 
-	purple_debug_info( PLUGIN_ID, "user %s sent us an encrypted message\n", from );
+	purple_debug_info( info.id, "user %s sent us an encrypted message\n", from );
 
 	// get data of "x" node
 	char* cipher_str = xmlnode_get_data( x_node );
 	if( NULL == cipher_str ) {
-		purple_debug_error( PLUGIN_ID, "xml token had no data!\n" );
+		purple_debug_error( info.id, "xml token had no data!\n" );
 		return FALSE;
 	}
 
 	// try to decrypt
 	char* plain_str = decrypt( cipher_str );
 	if( NULL == plain_str ) {
-		purple_debug_error( PLUGIN_ID, "could not decrypt message!\n" );
+		purple_debug_error( info.id, "could not decrypt message!\n" );
 		goto l_free_cipher_str;
 	}
 
@@ -898,11 +933,11 @@ l_free_cipher_str:
  * ------------------ */
 static gboolean jabber_presence_received( PurpleConnection* pc, const char* type, const char* from, const xmlnode* presence ) {
 	if( NULL == from ) {
-		purple_debug_error( PLUGIN_ID, "jabber_presence_received: missing from\n" );
+		purple_debug_error( info.id, "jabber_presence_received: missing from\n" );
 		return FALSE;
 	}
 	if( NULL == presence ) {
-		purple_debug_error( PLUGIN_ID, "jabber_presence_received: missing presence\n" );
+		purple_debug_error( info.id, "jabber_presence_received: missing presence\n" );
 		return FALSE;
 	}
 
@@ -911,18 +946,18 @@ static gboolean jabber_presence_received( PurpleConnection* pc, const char* type
 	if( NULL == x_node )
 		return FALSE;
 	// user supports openpgp encryption
-	purple_debug_info( PLUGIN_ID, "user %s supports openpgp encryption!\n", from );
+	purple_debug_info( info.id, "user %s supports openpgp encryption!\n", from );
 
 	char* x_node_data = xmlnode_get_data( x_node );
 	if( NULL == x_node_data )
-		purple_debug_info( PLUGIN_ID, "user %s sent empty signed presence\n", from );
+		purple_debug_info( info.id, "user %s sent empty signed presence\n", from );
 	else {
 		// try to verify
 		char* fpr = verify( x_node_data );
 		if( NULL == fpr )
-			purple_debug_error( PLUGIN_ID, "could not verify presence of user %s\n", from );
+			purple_debug_error( info.id, "could not verify presence of user %s\n", from );
 		else {
-			purple_debug_info( PLUGIN_ID, "user %s has fingerprint %s\n", from, fpr );
+			purple_debug_info( info.id, "user %s has fingerprint %s\n", from, fpr );
 			g_free(fpr);
 		}
 
@@ -939,7 +974,7 @@ static gboolean jabber_presence_received( PurpleConnection* pc, const char* type
 static gboolean is_encr_enabled( PurpleConversation* conv ) {
 	GtkToggleButton* tb = GTK_TOGGLE_BUTTON( purple_conversation_get_data( conv, GPG_CHECK_BTN_ENCR_ENABLED ) );
 	if( NULL == tb ) {
-		purple_debug_info( PLUGIN_ID, "jabber_send_signal_cb: purple_conversation_get_data failed\n" );
+		purple_debug_info( info.id, "jabber_send_signal_cb: purple_conversation_get_data failed\n" );
 		return FALSE;
 	}
 
@@ -951,7 +986,7 @@ static gboolean is_encr_enabled( PurpleConversation* conv ) {
  * ------------------ */
 static void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpointer unused ) {
 	if( packet == NULL ) {
-		purple_debug_error( PLUGIN_ID, "jabber_send_signal_cb: missing packet\n" );
+		purple_debug_error( info.id, "jabber_send_signal_cb: missing packet\n" );
 		return;
 	}
 
@@ -963,7 +998,7 @@ static void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpoin
 		// check if user selected a main key
 		const char* fpr = purple_prefs_get_string( PREF_MY_KEY );
 		if( NULL == fpr || IS_EMPTY_STR( fpr ) )
-			purple_debug_info( PLUGIN_ID, "no key selected!\n" );
+			purple_debug_info( info.id, "no key selected!\n" );
 		else {
 			// user did select a key
 			// get status message from packet
@@ -971,16 +1006,16 @@ static void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpoin
 			char* status_str = ( NULL == status_node ) ? NULL : xmlnode_get_data( status_node );
 			// sign status message
 			const char* status_str2 = ( NULL == status_str ) ? "" : status_str;
-			purple_debug_info( PLUGIN_ID, "signing status '%s' with key %s\n", status_str2, fpr );
+			purple_debug_info( info.id, "signing status '%s' with key %s\n", status_str2, fpr );
 
 			char* sig_str = sign( status_str2, fpr );
 			if( sig_str == NULL ) {
-				purple_debug_error( PLUGIN_ID, "sign failed\n" );
+				purple_debug_error( info.id, "sign failed\n" );
 				return;
 			}
 
 			// create special "x" childnode
-			purple_debug_info( PLUGIN_ID, "sending presence with signature\n" );
+			purple_debug_info( info.id, "sending presence with signature\n" );
 			xmlnode* x_node = xmlnode_new_child( *packet, "x" );
 			xmlnode_set_namespace( x_node, NS_SIGNED );
 			xmlnode_insert_data( x_node, sig_str, -1 );
@@ -995,25 +1030,25 @@ static void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpoin
 
 		PurpleConversation* conv = purple_find_conversation_with_account( PURPLE_CONV_TYPE_IM, to, pc->account );
 		if( NULL == conv ) {
-			purple_debug_info( PLUGIN_ID, "jabber_send_signal_cb: purple_find_conversation_with_account failed\n" );
+			purple_debug_info( info.id, "jabber_send_signal_cb: purple_find_conversation_with_account failed\n" );
 			return;
 		}
 
 		if( !is_encr_enabled( conv ) ) {
-			purple_debug_info( PLUGIN_ID, "jabber_send_signal_cb: Encryption disabled\n" );
+			purple_debug_info( info.id, "jabber_send_signal_cb: Encryption disabled\n" );
 			return;
 		}
 
 		// get message
 		char* message = xmlnode_get_data( body_node );
 		if( NULL == message ) {
-			purple_debug_info( PLUGIN_ID, "jabber_send_signal_cb: xmlnode_get_data( body_node ) failed\n" );
+			purple_debug_info( info.id, "jabber_send_signal_cb: xmlnode_get_data( body_node ) failed\n" );
 			return;
 		}
 
 		char* bare_jid = get_bare_jid( to );
 		if( NULL == bare_jid ) {
-			purple_debug_info( PLUGIN_ID, "jabber_send_signal_cb: get_bare_jid failed for %s\n", to );
+			purple_debug_info( info.id, "jabber_send_signal_cb: get_bare_jid failed for %s\n", to );
 			g_free( message );
 			return;
 		}
@@ -1021,20 +1056,20 @@ static void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpoin
 		// get encryption key
 		struct list_item* item = g_hash_table_lookup( list_fingerprints, bare_jid );
 		if( NULL == item ) {
-			purple_debug_info( PLUGIN_ID, "there is no key for encrypting message to %s\n", bare_jid );
+			purple_debug_info( info.id, "there is no key for encrypting message to %s\n", bare_jid );
 			g_free( message );
 			g_free( bare_jid );
 			return;
 		}
 
-		purple_debug_info( PLUGIN_ID, "found key for encryption to user %s: %s\n", bare_jid, item->fpr );
+		purple_debug_info( info.id, "found key for encryption to user %s: %s\n", bare_jid, item->fpr );
 		g_free( bare_jid );
 
 		// encrypt message
 		char* enc_str = encrypt( &item->ctx, item->key_arr, message, item->fpr );
 		g_free( message );
 		if( NULL == enc_str ) {
-			purple_debug_error( PLUGIN_ID, "could not encrypt message\n" );
+			purple_debug_error( info.id, "could not encrypt message\n" );
 			return;
 		}
 		// remove message from body
@@ -1042,7 +1077,7 @@ static void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpoin
 		xmlnode_insert_data( body_node, "[ERROR: This message is encrypted, and you are unable to decrypt it.]" , -1 );
 
 		// add special "x" childnode for encrypted text
-		purple_debug_info( PLUGIN_ID, "sending encrypted message\n" );
+		purple_debug_info( info.id, "sending encrypted message\n" );
 		xmlnode* x_node = xmlnode_new_child( *packet, "x" );
 		xmlnode_set_namespace( x_node, NS_ENC );
 		xmlnode_insert_data( x_node, enc_str, -1 );
@@ -1081,11 +1116,11 @@ static void menu_action_sendkey_cb( PurpleConversation* conv, void* data ) {
  * ------------------ */
 void conversation_extended_menu_cb( PurpleConversation* conv, GList** list ) {
 	if( NULL == conv ) {
-		purple_debug_error( PLUGIN_ID, "conversation_extended_menu_cb: missing conv\n" );
+		purple_debug_error( info.id, "conversation_extended_menu_cb: missing conv\n" );
 		return;
 	}
 	if( NULL == list ) {
-		purple_debug_error( PLUGIN_ID, "conversation_extended_menu_cb: missing list\n" );
+		purple_debug_error( info.id, "conversation_extended_menu_cb: missing list\n" );
 		return;
 	}
 
@@ -1113,7 +1148,7 @@ static void pub_key_selected_cb( GtkCheckMenuItem *checkmenuitem, PurpleConversa
 
 	PurpleBuddy *buddy = purple_find_buddy( purple_conversation_get_account( conv ), conv->name );
 	if( NULL == buddy ) {
-		purple_debug_error( PLUGIN_ID, "buddy %s not found\n", conv->name );
+		purple_debug_error( info.id, "buddy %s not found\n", conv->name );
 		g_free( bare_jid );
 		return;
 	}
@@ -1151,20 +1186,20 @@ static gboolean pub_key_bnt_pressed( GtkWidget *w, GdkEventButton *event, Purple
 	gpgme_ctx_t ctx;
 	gpgme_error_t error = gpgme_new( &ctx );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		return TRUE;
 	}
 
 	// list public keys
 	error = gpgme_op_keylist_start( ctx, NULL, 0 );
 	if( error != GPG_ERR_NO_ERROR ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_op_keylist_start failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_op_keylist_start failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		return TRUE;
 	}
 
 	PurpleBuddy *buddy = purple_find_buddy( purple_conversation_get_account( conv ), conv->name );
 	if( NULL == buddy ) {
-		purple_debug_error( PLUGIN_ID, "buddy %s not found\n", conv->name );
+		purple_debug_error( info.id, "buddy %s not found\n", conv->name );
 		return TRUE;
 	}
 
@@ -1220,11 +1255,11 @@ static void conversation_switched( PurpleConversation *conv, void * data ) {
 	// check if the user with the jid=conv->name has signed his presence
 	char* bare_jid = get_bare_jid( conv->name );
 	if( NULL == bare_jid ) {
-		purple_debug_info( PLUGIN_ID, "conversation_switched: get_bare_jid failed for %s\n", conv->name );
+		purple_debug_info( info.id, "conversation_switched: get_bare_jid failed for %s\n", conv->name );
 		return;
 	}
 
-	purple_debug_info( PLUGIN_ID, "conversation name: %s bare jid: %s\n", conv->name, bare_jid );
+	purple_debug_info( info.id, "conversation name: %s bare jid: %s\n", conv->name, bare_jid );
 
 	// get stored info about user
 	char sys_msg_buffer[1000];
@@ -1338,7 +1373,7 @@ static PurplePluginPrefFrame* get_plugin_pref_frame( PurplePlugin* plugin ) {
 	gpgme_check_version( NULL );
 	error = gpgme_new( &ctx );
 	if( error ) {
-		purple_debug_error( PLUGIN_ID, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_new failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 		return NULL;
 	}
 
@@ -1357,11 +1392,11 @@ static PurplePluginPrefFrame* get_plugin_pref_frame( PurplePlugin* plugin ) {
 			// add key to preference chooser
 			//TODO: find something better for g_strdup, or some possibility to free memory after preferences dialog closed
 			purple_plugin_pref_add_choice( ppref, g_strdup( key->uids->uid ), g_strdup( key->subkeys->fpr ) );
-			purple_debug_info( PLUGIN_ID, "Found secret key for: %s has fpr %s\n", key->uids->uid, key->subkeys->fpr );
+			purple_debug_info( info.id, "Found secret key for: %s has fpr %s\n", key->uids->uid, key->subkeys->fpr );
 			gpgme_key_release( key );
 		}
 	} else
-		purple_debug_error( PLUGIN_ID, "gpgme_op_keylist_start failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
+		purple_debug_error( info.id, "gpgme_op_keylist_start failed: %s %s\n", gpgme_strsource( error ), gpgme_strerror( error ) );
 
 	// release resources
 	gpgme_release( ctx );
@@ -1371,56 +1406,6 @@ static PurplePluginPrefFrame* get_plugin_pref_frame( PurplePlugin* plugin ) {
 
 	return frame;
 }
-
-/* ------------------
- * The plugin ui info struct for preferences dialog
- * ------------------ */
-static PurplePluginUiInfo prefs_info = {
-	get_plugin_pref_frame,
-	0,   /* page_num (Reserved) */
-	NULL, /* frame (Reserved) */
-	/* Padding */
-	NULL,
-	NULL,
-	NULL,
-	NULL
-};
-
-/* ------------------
- * The plugin info struct
- * ------------------ */
-static PurplePluginInfo info = {
-    PURPLE_PLUGIN_MAGIC,
-    PURPLE_MAJOR_VERSION,
-    PURPLE_MINOR_VERSION,
-    PURPLE_PLUGIN_STANDARD,
-    NULL,
-    0,
-    NULL,
-    PURPLE_PRIORITY_DEFAULT,
-
-    PLUGIN_ID,
-    "GPG/OPENPGP (XEP-0027)",
-    "0.9",
-
-    "GPG Plugin for Pidgin",          
-    "Simple GPG Plugin for Pidgin.",          
-    "Alexander Murauer <segler_alex@web.de>",
-    "https://github.com/segler-alex/Pidgin-GPG",     
-    
-    plugin_load,                   
-    NULL,                          
-    NULL,                          
-                                   
-    NULL,                          
-    NULL,                          
-    &prefs_info,                        
-    NULL,                   
-    NULL,                          
-    NULL,                          
-    NULL,                          
-    NULL                           
-};                               
 
 /* ------------------
  * plugin init
