@@ -48,11 +48,11 @@ static const char*		PREF_PUB_KEY_FPR= "GPG/pub_key_fpr";
 
 static const char*		NS_SIGNED		= "jabber:x:signed";
 static const char*		NS_ENC			= "jabber:x:encrypted";
-static const char*		NS_XMPP_CARBONS	= "urn:xmpp:carbons:2";
-static const char*		PGP_MSG_HEADER	= "-----BEGIN PGP MESSAGE-----";
-static const char*		PGP_MSG_FOOTER	= "-----END PGP MESSAGE-----";
-static const char*		PGP_SIG_HEADER	= "-----BEGIN PGP SIGNATURE-----";
-static const char*		PGP_SIG_FOOTER	= "-----END PGP SIGNATURE-----";
+
+static const char		PGP_MSG_HEADER[]	= "-----BEGIN PGP MESSAGE-----";
+static const char		PGP_MSG_FOOTER[]	= "-----END PGP MESSAGE-----";
+static const char		PGP_SIG_HEADER[]	= "-----BEGIN PGP SIGNATURE-----";
+static const char		PGP_SIG_FOOTER[]	= "-----END PGP SIGNATURE-----";
 
 /* ------------------
  * The plugin ui info struct for preferences dialog
@@ -178,7 +178,7 @@ static char* str_pgp_wrap( const char* unwrappedBuffer, gboolean asSignature ) {
 	char*					buffer = NULL;
 
 	if( asSignature ) {
-		if( ( buffer = g_malloc( strlen( PGP_SIG_HEADER ) + strlen( unwrappedBuffer ) + strlen( PGP_SIG_FOOTER ) + 4 ) ) != NULL ) {
+		if( ( buffer = g_malloc( (sizeof( PGP_SIG_HEADER ) - 1) + strlen( unwrappedBuffer ) + (sizeof( PGP_SIG_FOOTER ) - 1) + 4 ) ) != NULL ) {
 			strcpy( buffer, PGP_SIG_HEADER );
 			strcat( buffer, "\n\n" );
 			strcat( buffer, unwrappedBuffer );
@@ -186,7 +186,7 @@ static char* str_pgp_wrap( const char* unwrappedBuffer, gboolean asSignature ) {
 			strcat( buffer, PGP_SIG_FOOTER );
 		}
 	} else {
-		if( ( buffer = g_malloc( strlen( PGP_MSG_HEADER ) + strlen( unwrappedBuffer ) + strlen( PGP_MSG_FOOTER ) + 4 ) ) != NULL ) {
+		if( ( buffer = g_malloc( (sizeof( PGP_MSG_HEADER ) - 1) + strlen( unwrappedBuffer ) + (sizeof( PGP_MSG_FOOTER ) - 1) + 4 ) ) != NULL ) {
 			strcpy( buffer, PGP_MSG_HEADER );
 			strcat( buffer, "\n\n" );
 			strcat( buffer, unwrappedBuffer );
