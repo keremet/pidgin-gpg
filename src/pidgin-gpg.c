@@ -97,8 +97,6 @@ struct list_item {
 	gpgme_ctx_t				ctx;
 	// the gpgme key array with the fpr and senders fpr within ctx
 	gpgme_key_t				key_arr[ 3 ];
-	// the key-fingerprint of the receiver
-	char*					fpr;
 };
 
 static inline bool is_empty_str( const char* s ) {
@@ -108,12 +106,11 @@ static inline bool is_empty_str( const char* s ) {
 /* ------------------
  * Use g_strdup for arguments
  * ------------------ */
-static void list_fingerprints_add( char* bare_jid, char* pub_key_fpr ) {
-	if( NULL == list_fingerprints || NULL == bare_jid || NULL == pub_key_fpr )
+static void list_fingerprints_add( char* bare_jid ) {
+	if( NULL == list_fingerprints || NULL == bare_jid )
 		return;
 
 	struct list_item* item = g_malloc0( sizeof( struct list_item ) );
-	item->fpr = pub_key_fpr;
 	g_hash_table_insert( list_fingerprints, bare_jid, item );
 }
 /* ------------------
@@ -130,8 +127,6 @@ static void list_item_destroy( gpointer item ) {
 		gpgme_key_release( ( (struct list_item*)item )->key_arr[ 1 ] );
 	if( ( (struct list_item*)item )->ctx != NULL )
 		gpgme_release( ( (struct list_item*)item )->ctx );
-	if( ( (struct list_item*)item )->fpr != NULL )
-		g_free( ( (struct list_item*)item )->fpr );
 	g_free( item );
 }
 
@@ -1064,11 +1059,26 @@ static void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpoin
 			return;
 		}
 
-		purple_debug_info( info.id, "found key for encryption to user %s: %s\n", bare_jid, item->fpr );
+		PurpleBuddy *buddy = purple_find_buddy( pc->account, bare_jid );
+		if( NULL == buddy ) {
+			purple_debug_info( info.id, "buddy %s not found\n", bare_jid );
+			g_free( message );
+			g_free( bare_jid );
+			return;
+		}
+
+		const char* pub_key_fpr = purple_blist_node_get_string( &buddy->node, PREF_PUB_KEY_FPR );
+		if( NULL == pub_key_fpr || is_empty_str(pub_key_fpr) ) {
+			purple_debug_info( info.id, "pub_key_fpr %s not found\n", bare_jid );
+			g_free( message );
+			g_free( bare_jid );
+			return;
+		}
+
 		g_free( bare_jid );
 
 		// encrypt message
-		char* enc_str = encrypt( &item->ctx, item->key_arr, message, item->fpr );
+		char* enc_str = encrypt( &item->ctx, item->key_arr, message, pub_key_fpr );
 		g_free( message );
 		if( NULL == enc_str ) {
 			purple_debug_error( info.id, "could not encrypt message\n" );
@@ -1174,7 +1184,7 @@ static void pub_key_selected_cb( GtkCheckMenuItem *checkmenuitem, PurpleConversa
 		gtk_toggle_button_set_active( GTK_TOGGLE_BUTTON( check_bnt ), TRUE );
 		gtk_widget_set_sensitive( check_bnt, TRUE );
 		purple_blist_node_set_string( &buddy->node, PREF_PUB_KEY_FPR, new_value );
-		list_fingerprints_add( bare_jid, g_strdup( new_value ) );
+		list_fingerprints_add( bare_jid );
 	}
 }
 
@@ -1276,18 +1286,18 @@ static void conversation_switched( PurpleConversation *conv, void * data ) {
 		} else {
 			if( g_hash_table_lookup( list_fingerprints, bare_jid ) != NULL )
 				g_hash_table_remove( list_fingerprints, bare_jid );
-			list_fingerprints_add( g_strdup( bare_jid ), g_strdup( pub_key_fpr ) );
+			list_fingerprints_add( g_strdup( bare_jid ) );
 			struct list_item* item = g_hash_table_lookup( list_fingerprints, bare_jid );
 			if( item != NULL ) {
 				// check if we have key locally
 				char *userid = NULL;
-				if( is_key_available( &item->ctx, item->key_arr, item->fpr, FALSE, FALSE, &userid ) == FALSE ) {
+				if( is_key_available( &item->ctx, item->key_arr, pub_key_fpr, FALSE, FALSE, &userid ) == FALSE ) {
 					// local key is missing
-					snprintf( sys_msg_buffer, sizeof( sys_msg_buffer ), "User has key with Fingerprint %s, but we do not have it locally. Try Options -> \"Try to retrieve key of '%s' from server\"", item->fpr, bare_jid );
+					snprintf( sys_msg_buffer, sizeof( sys_msg_buffer ), "User has key with Fingerprint %s, but we do not have it locally. Try Options -> \"Try to retrieve key of '%s' from server\"", pub_key_fpr, bare_jid );
 					gtk_widget_set_sensitive( check_bnt, FALSE );
 				} else {
 					// key is already available locally -> enable mode_enc
-					snprintf( sys_msg_buffer, sizeof( sys_msg_buffer ), "Encryption enabled with %s (%s)", userid, item->fpr );
+					snprintf( sys_msg_buffer, sizeof( sys_msg_buffer ), "Encryption enabled with %s (%s)", userid, pub_key_fpr );
 					gtk_toggle_button_set_active( GTK_TOGGLE_BUTTON( check_bnt ), TRUE );
 				}
 				if( userid != NULL )
