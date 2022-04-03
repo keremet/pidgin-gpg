@@ -20,13 +20,6 @@
 
 #define PURPLE_PLUGINS
 
-#ifndef TRUE
-	#define TRUE		(1==1)
-#endif
-#ifndef FALSE
-	#define FALSE		(1==0)
-#endif
-
 #define EQ_STR( s1, s2 ) (strcmp(s1, s2) == 0)
 #define IS_EMPTY_STR( s ) (s[0] == '\0')
 
