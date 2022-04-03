@@ -20,13 +20,11 @@
 
 #define PURPLE_PLUGINS
 
-#define EQ_STR( s1, s2 ) (strcmp(s1, s2) == 0)
-#define IS_EMPTY_STR( s ) (s[0] == '\0')
-
 #include				"../config.h"
 
 #include				<locale.h>
 #include				<string.h>
+#include				<stdbool.h>
 
 #include				"notify.h"
 #include				"plugin.h"
@@ -102,6 +100,10 @@ struct list_item {
 	// the key-fingerprint of the receiver
 	char*					fpr;
 };
+
+static inline bool is_empty_str( const char* s ) {
+	return (s[0] == '\0');
+}
 
 /* ------------------
  * Use g_strdup for arguments
@@ -693,7 +695,7 @@ static char* encrypt( gpgme_ctx_t* ctx, gpgme_key_t* key_arr, const char* plain_
 	if( key_arr[ 1 ] == NULL ) {
 		// check if user selected a main key
 		const char* sender_fpr = purple_prefs_get_string( PREF_MY_KEY );
-		if( NULL == sender_fpr || IS_EMPTY_STR( sender_fpr ) )
+		if( NULL == sender_fpr || is_empty_str( sender_fpr ) )
 			purple_debug_error( info.id, "purple_prefs_get_string: PREF_MY_KEY was empty\n");
 		else {
 			// get own key by fingerprint
@@ -997,7 +999,7 @@ static void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpoin
 	if( g_str_equal( (*packet)->name, "presence" ) ) {
 		// check if user selected a main key
 		const char* fpr = purple_prefs_get_string( PREF_MY_KEY );
-		if( NULL == fpr || IS_EMPTY_STR( fpr ) )
+		if( NULL == fpr || is_empty_str( fpr ) )
 			purple_debug_info( info.id, "no key selected!\n" );
 		else {
 			// user did select a key
@@ -1091,7 +1093,7 @@ static void jabber_send_signal_cb( PurpleConnection* pc, xmlnode** packet, gpoin
 static void menu_action_sendkey_cb( PurpleConversation* conv, void* data ) {
 	// check if user selected a main key
 	const char* fpr = purple_prefs_get_string( PREF_MY_KEY );
-	if( NULL == fpr || IS_EMPTY_STR( fpr ) ) {
+	if( NULL == fpr || is_empty_str( fpr ) ) {
 		purple_conversation_write( conv, "", "You haven't selected a personal key yet.", PURPLE_MESSAGE_SYSTEM | PURPLE_MESSAGE_NO_LOG, time( NULL ) );
 		return;
 	}
@@ -1125,7 +1127,7 @@ void conversation_extended_menu_cb( PurpleConversation* conv, GList** list ) {
 	}
 
 	const char* fpr = purple_prefs_get_string( PREF_MY_KEY );
-	if( fpr != NULL && !IS_EMPTY_STR( fpr ) ) {
+	if( fpr != NULL && !is_empty_str( fpr ) ) {
 		char buffer[ 200 ];
 		snprintf( buffer, sizeof( buffer ), "Send own public key to '%s'", conv->name );
 		*list = g_list_append( *list,
@@ -1163,7 +1165,7 @@ static void pub_key_selected_cb( GtkCheckMenuItem *checkmenuitem, PurpleConversa
 
 	const char* new_value = last_space + 1;
 	GtkWidget* check_bnt = (GtkWidget*)purple_conversation_get_data( conv, GPG_CHECK_BTN_ENCR_ENABLED );
-	if( cur_value != NULL && EQ_STR( new_value, cur_value ) ) {
+	if( cur_value != NULL && g_str_equal( new_value, cur_value ) ) {
 		purple_blist_node_remove_setting( &buddy->node, PREF_PUB_KEY_FPR );
 		g_free( bare_jid );
 		gtk_toggle_button_set_active( GTK_TOGGLE_BUTTON( check_bnt ), FALSE );
@@ -1216,7 +1218,7 @@ static gboolean pub_key_bnt_pressed( GtkWidget *w, GdkEventButton *event, Purple
 
 			GtkWidget* memu_item = gtk_check_menu_item_new_with_label( label );
 			gtk_check_menu_item_set_active( GTK_CHECK_MENU_ITEM( memu_item ),
-					(pub_key_fpr != NULL && EQ_STR(key->subkeys->fpr, pub_key_fpr)) );
+					(pub_key_fpr != NULL && g_str_equal(key->subkeys->fpr, pub_key_fpr)) );
 			g_signal_connect( G_OBJECT( memu_item ), "toggled", G_CALLBACK(pub_key_selected_cb), conv );
 			gtk_menu_shell_append( GTK_MENU_SHELL( menu ), memu_item );
 		}
